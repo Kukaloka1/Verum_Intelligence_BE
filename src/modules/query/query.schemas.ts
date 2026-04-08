@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const querySuccessStatuses = ["success", "partial", "no_results"] as const;
-export const queryErrorStatuses = ["validation_error", "system_error"] as const;
+export const queryErrorStatuses = ["validation_error", "system_error", "rate_limited"] as const;
 export const queryResultStatuses = [...querySuccessStatuses, ...queryErrorStatuses] as const;
 
 const nullableTrimmedStringSchema = z
@@ -61,7 +61,12 @@ export const queryErrorResponseSchema = z.object({
   citations: z.array(queryCitationSchema),
   sourcesUsed: z.literal(0),
   error: z.object({
-    code: z.enum(queryErrorStatuses),
+    code: z.enum([
+      "validation_error",
+      "system_error",
+      "RATE_LIMITED",
+      "DUPLICATE_QUERY_SUBMISSION"
+    ]),
     message: z.string().trim().min(1),
     details: z.array(z.string().trim().min(1)).optional()
   })

@@ -18,6 +18,7 @@ export type QueryResponse = z.infer<typeof queryResponseSchema>;
 export type QuerySuccessStatus = QuerySuccessResponse["resultStatus"];
 export type QueryErrorStatus = QueryErrorResponse["resultStatus"];
 export type QueryResultStatus = QueryResponse["resultStatus"];
+export type QueryRateLimitedCode = "RATE_LIMITED" | "DUPLICATE_QUERY_SUBMISSION";
 
 export type RetrievalMethod = "vector" | "keyword";
 

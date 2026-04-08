@@ -5,7 +5,9 @@ import { persistQueryRecord as persistQueryRecordHook } from "./query.persistenc
 import type {
   QueryErrorResponse,
   QueryExecutionResult,
+  QueryRateLimitedCode,
   QueryRequestBody,
+  NormalizedQueryInput,
   QuerySuccessResponse,
   ValidationErrorContext
 } from "./query.types";
@@ -61,8 +63,9 @@ export function createQueryService(overrides: Partial<QueryServiceDependencies> 
     ...overrides
   };
 
-  async function runQueryPipeline(input: QueryRequestBody): Promise<QueryExecutionResult> {
-    const normalizedInput = dependencies.normalizeQueryInput(input);
+  async function runQueryPipelineFromNormalizedInput(
+    normalizedInput: NormalizedQueryInput
+  ): Promise<QueryExecutionResult> {
     const retrievalPlan = await dependencies.buildRetrievalPlan(normalizedInput);
 
     const [vectorResultSettled, keywordResultSettled] = await Promise.allSettled([
@@ -139,13 +142,26 @@ export function createQueryService(overrides: Partial<QueryServiceDependencies> 
     };
   }
 
+  async function runQueryPipeline(input: QueryRequestBody): Promise<QueryExecutionResult> {
+    const normalizedInput = dependencies.normalizeQueryInput(input);
+    return runQueryPipelineFromNormalizedInput(normalizedInput);
+  }
+
   async function executeQuery(input: QueryRequestBody): Promise<QuerySuccessResponse> {
     const execution = await runQueryPipeline(input);
     return execution.response;
   }
 
+  async function executeQueryWithNormalizedInput(
+    normalizedInput: NormalizedQueryInput
+  ): Promise<QuerySuccessResponse> {
+    const execution = await runQueryPipelineFromNormalizedInput(normalizedInput);
+    return execution.response;
+  }
+
   return {
     executeQuery,
+    executeQueryWithNormalizedInput,
     runQueryPipeline,
 
     createValidationErrorResponse(context: ValidationErrorContext): QueryErrorResponse {
@@ -176,6 +192,35 @@ export function createQueryService(overrides: Partial<QueryServiceDependencies> 
           code: "system_error",
           message,
           details: ["Inspect backend logs for stack trace and dependency state."]
+        }
+      });
+    },
+
+    createRateLimitedResponse(input: {
+      code: QueryRateLimitedCode;
+      message: string;
+      limitations: string;
+      jurisdiction: string | null;
+    }): QueryErrorResponse {
+      return queryErrorResponseSchema.parse({
+        resultStatus: "rate_limited",
+        queryId: null,
+        jurisdiction: input.jurisdiction,
+        answer: {
+          summary: "Query request was throttled.",
+          body: [
+            {
+              sectionTitle: "Execution status",
+              content: input.limitations
+            }
+          ],
+          limitations: input.limitations
+        },
+        citations: [],
+        sourcesUsed: 0,
+        error: {
+          code: input.code,
+          message: input.message
         }
       });
     }

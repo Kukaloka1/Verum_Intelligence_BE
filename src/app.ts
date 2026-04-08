@@ -3,6 +3,7 @@ import sensible from "@fastify/sensible";
 import { registerAuth } from "@/plugins/auth";
 import { registerCors } from "@/plugins/cors";
 import { registerLogger } from "@/plugins/logger";
+import { registerRedis } from "@/plugins/redis";
 import { registerSupabase } from "@/plugins/supabase";
 import { registerHealthRoutes } from "@/routes/health";
 import { registerQueryRoutes } from "@/routes/query";
@@ -23,6 +24,7 @@ export async function buildApp() {
   await registerCors(app);
   await registerAuth(app);
   await registerSupabase(app);
+  await registerRedis(app);
 
   await registerHealthRoutes(app);
   await registerQueryRoutes(app);

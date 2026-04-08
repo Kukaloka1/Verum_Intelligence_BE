@@ -13,6 +13,9 @@ const envSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
   SUPABASE_DB_URL: z.string().optional(),
 
+  UPSTASH_REDIS_REST_URL: z.string().optional(),
+  UPSTASH_REDIS_REST_TOKEN: z.string().optional(),
+
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_CHAT_MODEL: z.string().default("gpt-5-mini"),
   OPENAI_EMBEDDING_MODEL: z.string().default("text-embedding-3-small")
