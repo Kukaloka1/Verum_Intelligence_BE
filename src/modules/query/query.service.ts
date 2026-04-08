@@ -104,7 +104,7 @@ export function createQueryService(overrides: Partial<QueryServiceDependencies> 
     const rankedResult = dependencies.mergeAndRankResults(vectorResult, keywordResult);
     const groundedContext = dependencies.buildGroundedContext(rankedResult, retrievalPlan);
     const citations = dependencies.formatCitations(groundedContext);
-    const generatedAnswer = dependencies.generateStructuredAnswer({
+    const generatedAnswer = await dependencies.generateStructuredAnswer({
       normalizedInput,
       groundedContext,
       citations,
