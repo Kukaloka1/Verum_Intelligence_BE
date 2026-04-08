@@ -1,3 +1,11 @@
 export const savedQueriesSql = {
-  insertSavedQuery: "-- TODO: implement saved_queries insert statement"
+  insertSavedQuery: `
+    insert into saved_queries (
+      user_id,
+      query_text,
+      jurisdiction_id,
+      answer_snapshot
+    )
+    values ($1, $2, $3, $4::jsonb)
+  `
 };

@@ -1,4 +1,13 @@
+import { queryRetrievalRepository } from "@/repositories/query-retrieval.repository";
 import type { NormalizedQueryInput, RetrievalPlan } from "../query.types";
+
+const DEFAULT_VECTOR_CANDIDATE_POOL_LIMIT = 250;
+const DEFAULT_VECTOR_TOP_K = 12;
+const DEFAULT_VECTOR_SIMILARITY_THRESHOLD = 0.6;
+const DEFAULT_KEYWORD_CHUNK_LIMIT = 24;
+const DEFAULT_KEYWORD_TITLE_DOCUMENT_LIMIT = 8;
+const DEFAULT_KEYWORD_TITLE_CHUNK_LIMIT = 18;
+const DEFAULT_MAX_GROUNDED_ENTRIES = 6;
 
 function extractKeywordHints(query: string): string[] {
   return Array.from(
@@ -6,26 +15,50 @@ function extractKeywordHints(query: string): string[] {
       query
         .toLowerCase()
         .split(/[^a-z0-9]+/i)
-        .filter((word) => word.length >= 4)
-        .slice(0, 12)
+        .filter((word) => word.length >= 3)
+        .slice(0, 14)
     )
   );
 }
 
-export function buildRetrievalPlan(input: NormalizedQueryInput): RetrievalPlan {
+function buildKeywordSearchQuery(normalizedQuery: string, keywordHints: string[]): string {
+  const terms = keywordHints.length > 0 ? keywordHints : normalizedQuery.toLowerCase().split(/\s+/g);
+  return terms.filter(Boolean).slice(0, 10).join(" ");
+}
+
+export async function buildRetrievalPlan(input: NormalizedQueryInput): Promise<RetrievalPlan> {
+  const keywordHints = extractKeywordHints(input.query);
+  const keywordSearchQuery = buildKeywordSearchQuery(input.query, keywordHints);
+
+  const jurisdictionInput = input.jurisdiction;
+  const jurisdictionSlug = jurisdictionInput ? jurisdictionInput.toLowerCase() : null;
+  const jurisdictionRecord = jurisdictionInput
+    ? await queryRetrievalRepository.resolveJurisdiction(jurisdictionInput)
+    : null;
+
   const notes = [
-    "Module 1 retrieval boundaries are wired.",
-    "Vector and keyword retrievers currently run in scaffold mode."
+    "Module 1 retrieval plan built from normalized query and retrieval hints.",
+    "Vector retrieval is executed only when query embeddings and embedded chunks are available."
   ];
 
-  if (input.jurisdiction) {
-    notes.push(`Jurisdiction scope requested: ${input.jurisdiction}`);
+  if (jurisdictionInput && !jurisdictionRecord) {
+    notes.push(`Jurisdiction '${jurisdictionInput}' is not currently available in jurisdictions table.`);
   }
 
   return {
     normalizedQuery: input.query,
-    jurisdiction: input.jurisdiction,
-    keywordHints: extractKeywordHints(input.query),
+    jurisdictionInput,
+    jurisdictionSlug,
+    jurisdictionId: jurisdictionRecord?.id ?? null,
+    keywordHints,
+    keywordSearchQuery,
+    vectorCandidatePoolLimit: DEFAULT_VECTOR_CANDIDATE_POOL_LIMIT,
+    vectorTopK: DEFAULT_VECTOR_TOP_K,
+    vectorSimilarityThreshold: DEFAULT_VECTOR_SIMILARITY_THRESHOLD,
+    keywordChunkLimit: DEFAULT_KEYWORD_CHUNK_LIMIT,
+    keywordTitleDocumentLimit: DEFAULT_KEYWORD_TITLE_DOCUMENT_LIMIT,
+    keywordTitleChunkLimit: DEFAULT_KEYWORD_TITLE_CHUNK_LIMIT,
+    maxGroundedEntries: DEFAULT_MAX_GROUNDED_ENTRIES,
     notes
   };
 }

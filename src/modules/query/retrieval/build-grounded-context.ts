@@ -1,9 +1,10 @@
-import type { GroundedContext, RankedRetrievalResult } from "../query.types";
+import type { GroundedContext, RankedRetrievalResult, RetrievalPlan } from "../query.types";
 
-const MAX_GROUNDED_ENTRIES = 6;
-
-export function buildGroundedContext(rankedResult: RankedRetrievalResult): GroundedContext {
-  const entries = rankedResult.items.slice(0, MAX_GROUNDED_ENTRIES);
+export function buildGroundedContext(
+  rankedResult: RankedRetrievalResult,
+  plan: RetrievalPlan
+): GroundedContext {
+  const entries = rankedResult.items.slice(0, plan.maxGroundedEntries);
   const contextText = entries
     .map((entry, index) => `[${index + 1}] ${entry.sourceName} — ${entry.excerpt}`)
     .join("\n");

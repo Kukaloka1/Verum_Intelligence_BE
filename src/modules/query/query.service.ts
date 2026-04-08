@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { toErrorMessage } from "@/utils/errors";
 import { queryErrorResponseSchema, querySuccessResponseSchema } from "./query.schemas";
 import { persistQueryRecord as persistQueryRecordHook } from "./query.persistence";
 import type {
@@ -62,15 +63,43 @@ export function createQueryService(overrides: Partial<QueryServiceDependencies> 
 
   async function runQueryPipeline(input: QueryRequestBody): Promise<QueryExecutionResult> {
     const normalizedInput = dependencies.normalizeQueryInput(input);
-    const retrievalPlan = dependencies.buildRetrievalPlan(normalizedInput);
+    const retrievalPlan = await dependencies.buildRetrievalPlan(normalizedInput);
 
-    const [vectorResult, keywordResult] = await Promise.all([
+    const [vectorResultSettled, keywordResultSettled] = await Promise.allSettled([
       dependencies.retrieveByVector(retrievalPlan),
       dependencies.retrieveByKeyword(retrievalPlan)
     ]);
 
+    const vectorResult =
+      vectorResultSettled.status === "fulfilled"
+        ? vectorResultSettled.value
+        : {
+            method: "vector" as const,
+            items: [],
+            deferred: true,
+            reason: `Vector retrieval failed: ${toErrorMessage(vectorResultSettled.reason)}`
+          };
+
+    const keywordResult =
+      keywordResultSettled.status === "fulfilled"
+        ? keywordResultSettled.value
+        : {
+            method: "keyword" as const,
+            items: [],
+            deferred: true,
+            reason: `Keyword retrieval failed: ${toErrorMessage(keywordResultSettled.reason)}`
+          };
+
+    if (vectorResultSettled.status === "rejected" && keywordResultSettled.status === "rejected") {
+      throw new Error(
+        `Both retrieval branches failed. Vector: ${toErrorMessage(
+          vectorResultSettled.reason
+        )}. Keyword: ${toErrorMessage(keywordResultSettled.reason)}.`
+      );
+    }
+
     const rankedResult = dependencies.mergeAndRankResults(vectorResult, keywordResult);
-    const groundedContext = dependencies.buildGroundedContext(rankedResult);
+    const groundedContext = dependencies.buildGroundedContext(rankedResult, retrievalPlan);
     const citations = dependencies.formatCitations(groundedContext);
     const generatedAnswer = dependencies.generateStructuredAnswer({
       normalizedInput,
@@ -93,6 +122,7 @@ export function createQueryService(overrides: Partial<QueryServiceDependencies> 
       queryId,
       normalizedInput,
       retrievalPlan,
+      groundedEntries: groundedContext.entries,
       response,
       citations
     });

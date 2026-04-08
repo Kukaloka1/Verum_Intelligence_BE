@@ -8,31 +8,38 @@ export async function persistQueryRecord(
 ): Promise<PersistQueryRecordResult> {
   const actions = [] as PersistQueryRecordResult["actions"];
 
-  actions.push(
-    await queryLogsRepository.recordQueryLog({
-      queryId: input.queryId,
-      query: input.normalizedInput.query,
-      jurisdiction: input.normalizedInput.jurisdiction,
-      userId: input.normalizedInput.userId,
-      response: input.response,
-      retrievalPlan: input.retrievalPlan
-    })
-  );
+  const queryLogAction = await queryLogsRepository.recordQueryLog({
+    queryId: input.queryId,
+    query: input.normalizedInput.query,
+    jurisdictionId: input.retrievalPlan.jurisdictionId,
+    userId: input.normalizedInput.userId,
+    response: input.response,
+    retrievalPlan: input.retrievalPlan
+  });
+  actions.push(queryLogAction);
 
-  actions.push(
-    await queryCitationsRepository.recordQueryCitations({
-      queryId: input.queryId,
-      citations: input.citations
-    })
-  );
+  if (queryLogAction.persisted) {
+    actions.push(
+      await queryCitationsRepository.recordQueryCitations({
+        queryId: input.queryId,
+        citations: input.citations,
+        groundedEntries: input.groundedEntries
+      })
+    );
+  } else {
+    actions.push({
+      target: "query_citations",
+      persisted: false,
+      reason: "Skipped: query log was not persisted, so citations could not be linked safely."
+    });
+  }
 
   if (input.normalizedInput.saveQuery && input.normalizedInput.userId) {
     actions.push(
       await savedQueriesRepository.recordSavedQuery({
-        queryId: input.queryId,
         userId: input.normalizedInput.userId,
         query: input.normalizedInput.query,
-        jurisdiction: input.normalizedInput.jurisdiction,
+        jurisdictionId: input.retrievalPlan.jurisdictionId,
         response: input.response
       })
     );

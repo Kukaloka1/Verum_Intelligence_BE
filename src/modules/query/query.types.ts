@@ -30,9 +30,31 @@ export interface NormalizedQueryInput {
 
 export interface RetrievalPlan {
   normalizedQuery: string;
-  jurisdiction: string | null;
+  jurisdictionInput: string | null;
+  jurisdictionSlug: string | null;
+  jurisdictionId: string | null;
   keywordHints: string[];
+  keywordSearchQuery: string;
+  vectorCandidatePoolLimit: number;
+  vectorTopK: number;
+  vectorSimilarityThreshold: number;
+  keywordChunkLimit: number;
+  keywordTitleDocumentLimit: number;
+  keywordTitleChunkLimit: number;
+  maxGroundedEntries: number;
   notes: string[];
+}
+
+export interface RetrievalChunkRecord {
+  chunkId: string;
+  documentId: string;
+  content: string;
+  embedding: string | null;
+  sourceName: string;
+  documentTitle: string;
+  publishedAt: string | null;
+  sourceType: string | null;
+  url: string | null;
 }
 
 export interface RetrievedChunkCandidate {
@@ -46,6 +68,7 @@ export interface RetrievedChunkCandidate {
   sourceType: string | null;
   url: string | null;
   method: RetrievalMethod;
+  matchedTerms: string[];
 }
 
 export interface RetrievalBranchResult {
@@ -96,6 +119,7 @@ export interface PersistQueryRecordInput {
   queryId: string;
   normalizedInput: NormalizedQueryInput;
   retrievalPlan: RetrievalPlan;
+  groundedEntries: RetrievedChunkCandidate[];
   response: QuerySuccessResponse;
   citations: QueryCitation[];
 }

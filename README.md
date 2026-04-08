@@ -128,7 +128,7 @@ verum_BE/
 │   ├── plugins/                # Fastify plugins (CORS, sensible, etc.)
 │   ├── routes/                 # HTTP route handlers (thin — validate and delegate)
 │   │   ├── health.ts           # GET /health
-│   │   ├── query.ts            # /api/query
+│   │   ├── query.ts            # /v1/query
 │   │   ├── dashboard.ts        # /api/dashboard
 │   │   ├── comparison.ts       # /api/comparison
 │   │   ├── toolkit.ts          # /api/toolkit
@@ -164,7 +164,7 @@ The backend route surface is organized around product modules:
 | Endpoint | Module | Status |
 |---|---|---|
 | `GET /health` | System | Active |
-| `POST /api/query` | AI Query | Scaffolded |
+| `POST /v1/query` | AI Query | Implemented (retrieval v1) |
 | `GET /api/dashboard` | Dashboard | Scaffolded |
 | `GET /api/comparison` | Comparison | Scaffolded |
 | `GET /api/toolkit` | Toolkit | Scaffolded |

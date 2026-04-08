@@ -1,9 +1,10 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { env } from "@/config/env";
+import type { Database } from "@/db/database.types";
 
-let dbClient: SupabaseClient | null = null;
+let dbClient: SupabaseClient<Database> | null = null;
 
-export function getDbClient(): SupabaseClient {
+export function getDbClient(): SupabaseClient<Database> {
   if (dbClient) {
     return dbClient;
   }
@@ -14,7 +15,7 @@ export function getDbClient(): SupabaseClient {
     );
   }
 
-  dbClient = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
+  dbClient = createClient<Database>(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: {
       persistSession: false,
       autoRefreshToken: false

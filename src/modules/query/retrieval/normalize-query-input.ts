@@ -11,7 +11,7 @@ function normalizeOptionalField(value: string | null): string | null {
 
 export function normalizeQueryInput(input: QueryRequestBody): NormalizedQueryInput {
   const normalizedQuery = input.query.trim().replace(/\s+/g, " ");
-  const normalizedJurisdiction = normalizeOptionalField(input.jurisdiction);
+  const normalizedJurisdiction = normalizeOptionalField(input.jurisdiction)?.toUpperCase() ?? null;
   const normalizedUserId = normalizeOptionalField(input.userId);
 
   return {

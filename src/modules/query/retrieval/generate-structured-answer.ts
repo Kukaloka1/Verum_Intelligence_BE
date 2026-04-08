@@ -16,12 +16,12 @@ interface GenerateStructuredAnswerInput {
 
 function buildNoResultsAnswer(normalizedInput: NormalizedQueryInput): QueryAnswer {
   return {
-    summary: "No grounded sources were retrieved for this query yet.",
+    summary: "No grounded sources matched this query in the current dataset.",
     body: [
       {
-        sectionTitle: "Current retrieval status",
+        sectionTitle: "Retrieval outcome",
         content:
-          "The Module 1 query contract is active, but retrieval adapters are scaffolded and currently returned zero grounded records for this request."
+          "The retrieval pipeline ran against stored source records but did not return evidence strong enough to produce a grounded answer."
       },
       {
         sectionTitle: "Requested query",
@@ -29,13 +29,13 @@ function buildNoResultsAnswer(normalizedInput: NormalizedQueryInput): QueryAnswe
       }
     ],
     limitations:
-      "No legal synthesis is generated without grounded citations. Implement vector/keyword retrieval to return source-backed content."
+      "No legal synthesis is returned when there is no grounded evidence. Try refining the query terms or jurisdiction scope."
   };
 }
 
 function buildGroundedBody(groundedContext: GroundedContext): QueryAnswer["body"] {
   return groundedContext.entries.map((entry, index) => ({
-    sectionTitle: `Grounded excerpt ${index + 1}`,
+    sectionTitle: `Evidence ${index + 1}`,
     content: `${entry.sourceName} | ${entry.documentTitle}: ${entry.excerpt}`
   }));
 }
@@ -56,11 +56,13 @@ export function generateStructuredAnswer({
 
   const resultStatus = deferredMethods.length > 0 ? "partial" : "success";
   const answer: QueryAnswer = {
-    summary: `Found ${citations.length} grounded citation(s) for the requested query context.`,
+    summary: `Retrieved ${citations.length} grounded citation(s) from stored source materials.`,
     body: buildGroundedBody(groundedContext),
     limitations:
       deferredMethods.length > 0
-        ? `Partial result: ${deferredMethods.join(", ")} retrieval path is still scaffolded for full Module 1 behavior.`
+        ? `Partial result: ${deferredMethods.join(
+            ", "
+          )} retrieval path was unavailable during this request.`
         : undefined
   };
 
