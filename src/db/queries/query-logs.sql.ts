@@ -1,1 +1,3 @@
-export const queryLogsSql = {};
+export const queryLogsSql = {
+  insertQueryLog: "-- TODO: implement query_logs insert statement"
+};

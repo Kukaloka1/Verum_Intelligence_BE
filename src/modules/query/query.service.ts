@@ -1,10 +1,155 @@
-import type { QueryPlaceholderResponse } from "./query.types";
+import { randomUUID } from "node:crypto";
+import { queryErrorResponseSchema, querySuccessResponseSchema } from "./query.schemas";
+import { persistQueryRecord as persistQueryRecordHook } from "./query.persistence";
+import type {
+  QueryErrorResponse,
+  QueryExecutionResult,
+  QueryRequestBody,
+  QuerySuccessResponse,
+  ValidationErrorContext
+} from "./query.types";
+import { buildGroundedContext as buildGroundedContextHook } from "./retrieval/build-grounded-context";
+import { buildRetrievalPlan as buildRetrievalPlanHook } from "./retrieval/build-retrieval-plan";
+import { formatCitations as formatCitationsHook } from "./retrieval/format-citations";
+import { generateStructuredAnswer as generateStructuredAnswerHook } from "./retrieval/generate-structured-answer";
+import { mergeAndRankResults as mergeAndRankResultsHook } from "./retrieval/merge-and-rank-results";
+import { normalizeQueryInput as normalizeQueryInputHook } from "./retrieval/normalize-query-input";
+import { retrieveByKeyword as retrieveByKeywordHook } from "./retrieval/retrieve-by-keyword";
+import { retrieveByVector as retrieveByVectorHook } from "./retrieval/retrieve-by-vector";
 
-export const queryService = {
-  getPlaceholder(): QueryPlaceholderResponse {
+interface QueryServiceDependencies {
+  normalizeQueryInput: typeof normalizeQueryInputHook;
+  buildRetrievalPlan: typeof buildRetrievalPlanHook;
+  retrieveByVector: typeof retrieveByVectorHook;
+  retrieveByKeyword: typeof retrieveByKeywordHook;
+  mergeAndRankResults: typeof mergeAndRankResultsHook;
+  buildGroundedContext: typeof buildGroundedContextHook;
+  formatCitations: typeof formatCitationsHook;
+  generateStructuredAnswer: typeof generateStructuredAnswerHook;
+  persistQueryRecord: typeof persistQueryRecordHook;
+}
+
+const defaultDependencies: QueryServiceDependencies = {
+  normalizeQueryInput: normalizeQueryInputHook,
+  buildRetrievalPlan: buildRetrievalPlanHook,
+  retrieveByVector: retrieveByVectorHook,
+  retrieveByKeyword: retrieveByKeywordHook,
+  mergeAndRankResults: mergeAndRankResultsHook,
+  buildGroundedContext: buildGroundedContextHook,
+  formatCitations: formatCitationsHook,
+  generateStructuredAnswer: generateStructuredAnswerHook,
+  persistQueryRecord: persistQueryRecordHook
+};
+
+function buildErrorAnswer(limitations: string) {
+  return {
+    summary: "Query request could not be completed.",
+    body: [
+      {
+        sectionTitle: "Execution status",
+        content: limitations
+      }
+    ],
+    limitations
+  };
+}
+
+export function createQueryService(overrides: Partial<QueryServiceDependencies> = {}) {
+  const dependencies: QueryServiceDependencies = {
+    ...defaultDependencies,
+    ...overrides
+  };
+
+  async function runQueryPipeline(input: QueryRequestBody): Promise<QueryExecutionResult> {
+    const normalizedInput = dependencies.normalizeQueryInput(input);
+    const retrievalPlan = dependencies.buildRetrievalPlan(normalizedInput);
+
+    const [vectorResult, keywordResult] = await Promise.all([
+      dependencies.retrieveByVector(retrievalPlan),
+      dependencies.retrieveByKeyword(retrievalPlan)
+    ]);
+
+    const rankedResult = dependencies.mergeAndRankResults(vectorResult, keywordResult);
+    const groundedContext = dependencies.buildGroundedContext(rankedResult);
+    const citations = dependencies.formatCitations(groundedContext);
+    const generatedAnswer = dependencies.generateStructuredAnswer({
+      normalizedInput,
+      groundedContext,
+      citations,
+      deferredMethods: rankedResult.deferredMethods
+    });
+
+    const queryId = randomUUID();
+    const response = querySuccessResponseSchema.parse({
+      resultStatus: generatedAnswer.resultStatus,
+      queryId,
+      jurisdiction: normalizedInput.jurisdiction,
+      answer: generatedAnswer.answer,
+      citations,
+      sourcesUsed: generatedAnswer.sourcesUsed
+    });
+
+    await dependencies.persistQueryRecord({
+      queryId,
+      normalizedInput,
+      retrievalPlan,
+      response,
+      citations
+    });
+
     return {
-      module: "query",
-      ready: false
+      normalizedInput,
+      retrievalPlan,
+      vectorResult,
+      keywordResult,
+      rankedResult,
+      groundedContext,
+      citations,
+      response
     };
   }
-};
+
+  async function executeQuery(input: QueryRequestBody): Promise<QuerySuccessResponse> {
+    const execution = await runQueryPipeline(input);
+    return execution.response;
+  }
+
+  return {
+    executeQuery,
+    runQueryPipeline,
+
+    createValidationErrorResponse(context: ValidationErrorContext): QueryErrorResponse {
+      return queryErrorResponseSchema.parse({
+        resultStatus: "validation_error",
+        queryId: null,
+        jurisdiction: null,
+        answer: buildErrorAnswer("Validation failed. Review request payload."),
+        citations: [],
+        sourcesUsed: 0,
+        error: {
+          code: "validation_error",
+          message: "Invalid query request payload.",
+          details: context.details
+        }
+      });
+    },
+
+    createSystemErrorResponse(message: string): QueryErrorResponse {
+      return queryErrorResponseSchema.parse({
+        resultStatus: "system_error",
+        queryId: null,
+        jurisdiction: null,
+        answer: buildErrorAnswer("System failure while handling query."),
+        citations: [],
+        sourcesUsed: 0,
+        error: {
+          code: "system_error",
+          message,
+          details: ["Inspect backend logs for stack trace and dependency state."]
+        }
+      });
+    }
+  };
+}
+
+export const queryService = createQueryService();
