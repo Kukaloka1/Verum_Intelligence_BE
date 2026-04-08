@@ -41,3 +41,8 @@ temp/
 # Runtime artifacts
 *.pid
 *.seed
+
+# Internal backend docs
+docs/API_CONTRACTS.md
+docs/ENVIRONMENT.md
+docs/BACKEND_NOTES.md
