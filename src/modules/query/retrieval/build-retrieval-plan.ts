@@ -8,6 +8,18 @@ const DEFAULT_KEYWORD_CHUNK_LIMIT = 24;
 const DEFAULT_KEYWORD_TITLE_DOCUMENT_LIMIT = 8;
 const DEFAULT_KEYWORD_TITLE_CHUNK_LIMIT = 18;
 const DEFAULT_MAX_GROUNDED_ENTRIES = 6;
+const JURISDICTION_CACHE_TTL_MS = 5 * 60 * 1000;
+
+interface CachedJurisdictionLookup {
+  cachedAt: number;
+  value: {
+    id: string;
+    slug: string;
+    name: string;
+  } | null;
+}
+
+const jurisdictionLookupCache = new Map<string, CachedJurisdictionLookup>();
 
 function extractKeywordHints(query: string): string[] {
   return Array.from(
@@ -26,6 +38,24 @@ function buildKeywordSearchQuery(normalizedQuery: string, keywordHints: string[]
   return terms.filter(Boolean).slice(0, 10).join(" ");
 }
 
+async function resolveJurisdictionWithCache(jurisdictionInput: string) {
+  const cacheKey = jurisdictionInput.trim().toLowerCase();
+  const now = Date.now();
+  const cached = jurisdictionLookupCache.get(cacheKey);
+
+  if (cached && now - cached.cachedAt <= JURISDICTION_CACHE_TTL_MS) {
+    return cached.value;
+  }
+
+  const resolved = await queryRetrievalRepository.resolveJurisdiction(jurisdictionInput);
+  jurisdictionLookupCache.set(cacheKey, {
+    cachedAt: now,
+    value: resolved
+  });
+
+  return resolved;
+}
+
 export async function buildRetrievalPlan(input: NormalizedQueryInput): Promise<RetrievalPlan> {
   const keywordHints = extractKeywordHints(input.query);
   const keywordSearchQuery = buildKeywordSearchQuery(input.query, keywordHints);
@@ -33,7 +63,7 @@ export async function buildRetrievalPlan(input: NormalizedQueryInput): Promise<R
   const jurisdictionInput = input.jurisdiction;
   const jurisdictionSlug = jurisdictionInput ? jurisdictionInput.toLowerCase() : null;
   const jurisdictionRecord = jurisdictionInput
-    ? await queryRetrievalRepository.resolveJurisdiction(jurisdictionInput)
+    ? await resolveJurisdictionWithCache(jurisdictionInput)
     : null;
 
   const notes = [

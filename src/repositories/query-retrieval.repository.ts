@@ -7,92 +7,128 @@ interface JurisdictionRecord {
   name: string;
 }
 
-interface RetrievalQueryParams {
+interface KeywordMatchesParams {
   jurisdictionId: string | null;
-  limit: number;
+  chunkLimit: number;
+  titleDocumentLimit: number;
+  titleChunkLimit: number;
 }
 
-interface RetrievalDocumentChunkParams extends RetrievalQueryParams {
-  documentIds: string[];
+interface VectorMatchesParams {
+  jurisdictionId: string | null;
+  topK: number;
+  candidatePoolLimit: number;
+  similarityThreshold: number;
 }
 
-const CHUNK_WITH_METADATA_SELECT = `
-  id,
-  chunk_index,
-  document_id,
-  jurisdiction_id,
-  regulator_id,
-  content,
-  embedding,
-  documents!inner(
-    id,
-    title,
-    published_at,
-    source_type,
-    raw_url,
-    sources!inner(
-      id,
-      title,
-      url,
-      source_type
-    ),
-    regulators!inner(
-      id,
-      name,
-      slug
-    )
-  )
-`;
-
-function toSingleObject<T>(value: unknown): T | null {
-  if (Array.isArray(value)) {
-    return (value[0] as T | undefined) ?? null;
-  }
-
-  if (value && typeof value === "object") {
-    return value as T;
-  }
-
-  return null;
+interface KeywordMatchRecord extends RetrievalChunkRecord {
+  matchChannel: "chunk" | "title";
+  rankScore: number;
 }
 
-function mapChunkRowToRecord(row: Record<string, unknown>): RetrievalChunkRecord | null {
-  const chunkId = typeof row.id === "string" ? row.id : null;
-  const documentId = typeof row.document_id === "string" ? row.document_id : null;
-  const content = typeof row.content === "string" ? row.content : null;
-  const embedding = typeof row.embedding === "string" ? row.embedding : null;
-  const document = toSingleObject<Record<string, unknown>>(row.documents);
+interface VectorMatchRecord extends RetrievalChunkRecord {
+  similarity: number;
+}
 
-  if (!chunkId || !documentId || !content || !document) {
+function asString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function mapRpcBaseRowToRecord(row: Record<string, unknown>): RetrievalChunkRecord | null {
+  const chunkId = asString(row.chunk_id);
+  const documentId = asString(row.document_id);
+  const content = asString(row.content);
+  const sourceName = asString(row.source_name);
+  const documentTitle = asString(row.document_title);
+  const publishedAt = asString(row.published_at);
+  const sourceType = asString(row.source_type);
+  const url = asString(row.url);
+
+  if (!chunkId || !documentId || !content || !sourceName || !documentTitle) {
     return null;
   }
-
-  const source = toSingleObject<Record<string, unknown>>(document.sources);
-  const regulator = toSingleObject<Record<string, unknown>>(document.regulators);
-
-  const regulatorName = typeof regulator?.name === "string" ? regulator.name : null;
-  const sourceTitle = typeof source?.title === "string" ? source.title : null;
-  const sourceUrl = typeof source?.url === "string" ? source.url : null;
-  const sourceTypeFromSource = typeof source?.source_type === "string" ? source.source_type : null;
 
   return {
     chunkId,
     documentId,
     content,
-    embedding,
-    sourceName: regulatorName ?? sourceTitle ?? "Unknown source",
-    documentTitle: typeof document.title === "string" ? document.title : "Untitled document",
-    publishedAt: typeof document.published_at === "string" ? document.published_at : null,
-    sourceType:
-      typeof document.source_type === "string" ? document.source_type : sourceTypeFromSource ?? null,
-    url: typeof document.raw_url === "string" ? document.raw_url : sourceUrl
+    sourceName,
+    documentTitle,
+    publishedAt,
+    sourceType,
+    url
   };
 }
 
-function mapChunkRows(rows: unknown[]): RetrievalChunkRecord[] {
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function mapKeywordRpcRows(rows: unknown[]): KeywordMatchRecord[] {
   return rows
-    .map((row) => mapChunkRowToRecord(row as Record<string, unknown>))
-    .filter((row): row is RetrievalChunkRecord => row !== null);
+    .map((row) => {
+      const record = mapRpcBaseRowToRecord(row as Record<string, unknown>);
+      if (!record) {
+        return null;
+      }
+
+      const rawMatchChannel =
+        typeof (row as Record<string, unknown>).match_channel === "string"
+          ? (row as Record<string, unknown>).match_channel
+          : null;
+      if (rawMatchChannel !== "chunk" && rawMatchChannel !== "title") {
+        return null;
+      }
+
+      const rankScore = toFiniteNumber((row as Record<string, unknown>).rank_score) ?? 0;
+
+      return {
+        ...record,
+        matchChannel: rawMatchChannel,
+        rankScore
+      };
+    })
+    .filter((row): row is KeywordMatchRecord => row !== null);
+}
+
+function mapVectorRpcRows(rows: unknown[]): VectorMatchRecord[] {
+  return rows
+    .map((row) => {
+      const record = mapRpcBaseRowToRecord(row as Record<string, unknown>);
+      if (!record) {
+        return null;
+      }
+
+      const similarity = toFiniteNumber((row as Record<string, unknown>).similarity);
+      if (similarity === null) {
+        return null;
+      }
+
+      return {
+        ...record,
+        similarity
+      };
+    })
+    .filter((row): row is VectorMatchRecord => row !== null);
+}
+
+function toPgVectorLiteral(embedding: number[]): string {
+  if (embedding.length === 0) {
+    throw new Error("Query embedding is empty and cannot be converted to pgvector literal.");
+  }
+
+  return `[${embedding.join(",")}]`;
 }
 
 async function resolveJurisdiction(jurisdictionInput: string): Promise<JurisdictionRecord | null> {
@@ -128,130 +164,52 @@ async function resolveJurisdiction(jurisdictionInput: string): Promise<Jurisdict
 
 async function fetchKeywordMatchedChunks(
   searchQuery: string,
-  params: RetrievalQueryParams
-): Promise<RetrievalChunkRecord[]> {
+  params: KeywordMatchesParams
+): Promise<KeywordMatchRecord[]> {
   if (!searchQuery.trim()) {
     return [];
   }
 
   const db = getDbClient();
-  let query = db
-    .from("chunks")
-    .select(CHUNK_WITH_METADATA_SELECT)
-    .textSearch("search_vector", searchQuery, {
-      config: "english",
-      type: "websearch"
-    })
-    .limit(params.limit);
-
-  if (params.jurisdictionId) {
-    query = query.eq("jurisdiction_id", params.jurisdictionId);
-  }
-
-  const { data, error } = await query;
-  if (error) {
-    throw new Error(`Keyword chunk retrieval failed: ${error.message}`);
-  }
-
-  return mapChunkRows((data ?? []) as unknown[]);
-}
-
-async function fetchTitleMatchedChunks(
-  searchQuery: string,
-  params: RetrievalQueryParams,
-  documentLimit: number
-): Promise<RetrievalChunkRecord[]> {
-  if (!searchQuery.trim()) {
-    return [];
-  }
-
-  const db = getDbClient();
-  let documentsQuery = db
-    .from("documents")
-    .select("id")
-    .textSearch("title_search_vector", searchQuery, {
-      config: "english",
-      type: "websearch"
-    })
-    .limit(documentLimit);
-
-  if (params.jurisdictionId) {
-    documentsQuery = documentsQuery.eq("jurisdiction_id", params.jurisdictionId);
-  }
-
-  const { data: documents, error: documentsError } = await documentsQuery;
-
-  if (documentsError) {
-    throw new Error(`Keyword title retrieval failed: ${documentsError.message}`);
-  }
-
-  const documentIds = (documents ?? [])
-    .map((doc) => (typeof doc.id === "string" ? doc.id : null))
-    .filter((id): id is string => id !== null);
-
-  if (documentIds.length === 0) {
-    return [];
-  }
-
-  return fetchChunksByDocumentIds({
-    documentIds,
-    jurisdictionId: params.jurisdictionId,
-    limit: params.limit
+  const { data, error } = await db.rpc("retrieve_keyword_matches", {
+    p_search_query: searchQuery,
+    p_jurisdiction_id: params.jurisdictionId ?? undefined,
+    p_chunk_limit: params.chunkLimit,
+    p_title_doc_limit: params.titleDocumentLimit,
+    p_title_chunk_limit: params.titleChunkLimit
   });
+  if (error) {
+    throw new Error(`Keyword retrieval failed: ${error.message}`);
+  }
+
+  return mapKeywordRpcRows((data ?? []) as unknown[]);
 }
 
-async function fetchChunksByDocumentIds(
-  params: RetrievalDocumentChunkParams
-): Promise<RetrievalChunkRecord[]> {
-  if (params.documentIds.length === 0) {
+async function fetchVectorMatchedChunks(
+  queryEmbedding: number[],
+  params: VectorMatchesParams
+): Promise<VectorMatchRecord[]> {
+  if (queryEmbedding.length === 0) {
     return [];
   }
 
   const db = getDbClient();
-  let query = db
-    .from("chunks")
-    .select(CHUNK_WITH_METADATA_SELECT)
-    .in("document_id", params.documentIds)
-    .order("chunk_index", { ascending: true })
-    .limit(params.limit);
-
-  if (params.jurisdictionId) {
-    query = query.eq("jurisdiction_id", params.jurisdictionId);
-  }
-
-  const { data, error } = await query;
+  const { data, error } = await db.rpc("retrieve_vector_matches", {
+    p_query_embedding: toPgVectorLiteral(queryEmbedding),
+    p_jurisdiction_id: params.jurisdictionId ?? undefined,
+    p_candidate_limit: params.candidatePoolLimit,
+    p_match_count: params.topK,
+    p_min_similarity: params.similarityThreshold
+  });
   if (error) {
-    throw new Error(`Document chunk retrieval failed: ${error.message}`);
+    throw new Error(`Vector retrieval failed: ${error.message}`);
   }
 
-  return mapChunkRows((data ?? []) as unknown[]);
-}
-
-async function fetchEmbeddedChunks(params: RetrievalQueryParams): Promise<RetrievalChunkRecord[]> {
-  const db = getDbClient();
-  let query = db
-    .from("chunks")
-    .select(CHUNK_WITH_METADATA_SELECT)
-    .not("embedding", "is", null)
-    .order("created_at", { ascending: false })
-    .limit(params.limit);
-
-  if (params.jurisdictionId) {
-    query = query.eq("jurisdiction_id", params.jurisdictionId);
-  }
-
-  const { data, error } = await query;
-  if (error) {
-    throw new Error(`Embedded chunk retrieval failed: ${error.message}`);
-  }
-
-  return mapChunkRows((data ?? []) as unknown[]);
+  return mapVectorRpcRows((data ?? []) as unknown[]);
 }
 
 export const queryRetrievalRepository = {
   resolveJurisdiction,
   fetchKeywordMatchedChunks,
-  fetchTitleMatchedChunks,
-  fetchChunksByDocumentIds,
-  fetchEmbeddedChunks
+  fetchVectorMatchedChunks
 };

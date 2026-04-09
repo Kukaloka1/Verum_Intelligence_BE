@@ -4,6 +4,12 @@ interface OpenAIEmbeddingResponse {
   data?: Array<{ embedding?: number[] }>;
 }
 
+const OPENAI_EMBEDDING_TIMEOUT_MS = 2500;
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
 function ensureEmbeddingVector(value: unknown): number[] {
   if (!Array.isArray(value)) {
     throw new Error("OpenAI embedding response did not include a vector array.");
@@ -22,17 +28,34 @@ export async function createEmbedding(input: string): Promise<number[] | null> {
     return null;
   }
 
-  const response = await fetch(`${client.baseUrl}/embeddings`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${client.apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: client.embeddingModel,
-      input
-    })
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), OPENAI_EMBEDDING_TIMEOUT_MS);
+  let response: Response;
+
+  try {
+    response = await fetch(`${client.baseUrl}/embeddings`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${client.apiKey}`,
+        "Content-Type": "application/json"
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: client.embeddingModel,
+        input
+      })
+    });
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error(
+        `OpenAI embeddings request timed out after ${OPENAI_EMBEDDING_TIMEOUT_MS}ms.`
+      );
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     const body = await response.text();

@@ -50,7 +50,6 @@ export interface RetrievalChunkRecord {
   chunkId: string;
   documentId: string;
   content: string;
-  embedding: string | null;
   sourceName: string;
   documentTitle: string;
   publishedAt: string | null;

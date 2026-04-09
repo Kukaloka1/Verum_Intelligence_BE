@@ -10,6 +10,7 @@ import { logError } from "@/utils/logger";
 import { getOpenAIClient } from "./openai.client";
 
 const MAX_OUTPUT_TOKENS = 1400;
+const OPENAI_SYNTHESIS_TIMEOUT_MS = 4500;
 
 const synthesisOutputSchema = z
   .object({
@@ -103,6 +104,10 @@ interface OpenAIResponsesCreatePayload {
   output?: OpenAIResponseOutputItem[];
 }
 
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
 function buildUserPrompt(input: QuerySynthesisInput): string {
   const evidence = input.groundedContext.entries.map((entry, index) => ({
     evidenceId: index + 1,
@@ -189,35 +194,44 @@ export async function synthesizeGroundedAnswer(
   }
 
   try {
-    const response = await fetch(`${client.baseUrl}/responses`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${client.apiKey}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: client.chatModel,
-        input: [
-          {
-            role: "system",
-            content: SYSTEM_PROMPT
-          },
-          {
-            role: "user",
-            content: buildUserPrompt(input)
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), OPENAI_SYNTHESIS_TIMEOUT_MS);
+    let response: Response;
+
+    try {
+      response = await fetch(`${client.baseUrl}/responses`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${client.apiKey}`,
+          "Content-Type": "application/json"
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: client.chatModel,
+          input: [
+            {
+              role: "system",
+              content: SYSTEM_PROMPT
+            },
+            {
+              role: "user",
+              content: buildUserPrompt(input)
+            }
+          ],
+          max_output_tokens: MAX_OUTPUT_TOKENS,
+          text: {
+            format: {
+              type: "json_schema",
+              name: "verum_grounded_query_answer",
+              schema: synthesisJsonSchema,
+              strict: true
+            }
           }
-        ],
-        max_output_tokens: MAX_OUTPUT_TOKENS,
-        text: {
-          format: {
-            type: "json_schema",
-            name: "verum_grounded_query_answer",
-            schema: synthesisJsonSchema,
-            strict: true
-          }
-        }
-      })
-    });
+        })
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (!response.ok) {
       const body = await response.text();
@@ -254,6 +268,17 @@ export async function synthesizeGroundedAnswer(
         ok: false,
         failure: "invalid_output",
         reason: toErrorMessage(error)
+      };
+    }
+
+    if (isAbortError(error)) {
+      const reason = `OpenAI synthesis request timed out after ${OPENAI_SYNTHESIS_TIMEOUT_MS}ms.`;
+      logError("OpenAI grounded synthesis timed out", { reason });
+
+      return {
+        ok: false,
+        failure: "provider_error",
+        reason
       };
     }
 

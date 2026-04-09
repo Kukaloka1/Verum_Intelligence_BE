@@ -10,6 +10,8 @@ interface UpstashRedisConfig {
   token: string;
 }
 
+const UPSTASH_COMMAND_TIMEOUT_MS = 500;
+
 export interface UpstashRedisClient {
   incr: (key: string) => Promise<number>;
   expire: (key: string, ttlSeconds: number) => Promise<boolean>;
@@ -30,14 +32,29 @@ function getRedisConfig(): UpstashRedisConfig | null {
 }
 
 async function runCommand<T>(config: UpstashRedisConfig, command: string[]): Promise<T> {
-  const response = await fetch(config.baseUrl, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.token}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(command)
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), UPSTASH_COMMAND_TIMEOUT_MS);
+  let response: Response;
+
+  try {
+    response = await fetch(config.baseUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.token}`,
+        "Content-Type": "application/json"
+      },
+      signal: controller.signal,
+      body: JSON.stringify(command)
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`Upstash Redis command timed out after ${UPSTASH_COMMAND_TIMEOUT_MS}ms.`);
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     const body = await response.text();

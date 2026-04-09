@@ -9,6 +9,7 @@ import type {
 const KEYWORD_BASE_SCORE = 0.45;
 const KEYWORD_TITLE_BOOST = 0.2;
 const KEYWORD_TERM_BOOST = 0.07;
+const KEYWORD_RANK_BOOST_CAP = 0.2;
 
 function buildExcerpt(content: string): string {
   const compact = content.replace(/\s+/g, " ").trim();
@@ -24,26 +25,34 @@ function findMatchedTerms(hints: string[], text: string): string[] {
   return hints.filter((hint) => normalized.includes(hint));
 }
 
-function computeKeywordScore(record: RetrievalChunkRecord, keywordHints: string[], titleMatch: boolean): number {
+function computeKeywordScore(
+  record: RetrievalChunkRecord,
+  keywordHints: string[],
+  titleMatch: boolean,
+  rankScore: number
+): number {
   const text = `${record.documentTitle} ${record.content}`;
   const matchedTerms = findMatchedTerms(keywordHints, text);
   const termBoost = Math.min(matchedTerms.length * KEYWORD_TERM_BOOST, 0.35);
   const titleBoost = titleMatch ? KEYWORD_TITLE_BOOST : 0;
+  const normalizedRank = Math.max(rankScore, 0);
+  const rankBoost = Math.min(normalizedRank * 0.15, KEYWORD_RANK_BOOST_CAP);
 
-  return Math.min(KEYWORD_BASE_SCORE + termBoost + titleBoost, 0.99);
+  return Math.min(KEYWORD_BASE_SCORE + termBoost + titleBoost + rankBoost, 0.99);
 }
 
 function toKeywordCandidate(
   record: RetrievalChunkRecord,
   plan: RetrievalPlan,
-  titleMatch: boolean
+  titleMatch: boolean,
+  rankScore: number
 ): RetrievedChunkCandidate {
   const matchedTerms = findMatchedTerms(plan.keywordHints, `${record.documentTitle} ${record.content}`);
 
   return {
     chunkId: record.chunkId,
     documentId: record.documentId,
-    score: computeKeywordScore(record, plan.keywordHints, titleMatch),
+    score: computeKeywordScore(record, plan.keywordHints, titleMatch, rankScore),
     excerpt: buildExcerpt(record.content),
     sourceName: record.sourceName,
     documentTitle: record.documentTitle,
@@ -65,28 +74,24 @@ export async function retrieveByKeyword(plan: RetrievalPlan): Promise<RetrievalB
     };
   }
 
-  const [chunkMatches, titleMatches] = await Promise.all([
-    queryRetrievalRepository.fetchKeywordMatchedChunks(plan.keywordSearchQuery, {
-      jurisdictionId: plan.jurisdictionId,
-      limit: plan.keywordChunkLimit
-    }),
-    queryRetrievalRepository.fetchTitleMatchedChunks(
-      plan.keywordSearchQuery,
-      {
-        jurisdictionId: plan.jurisdictionId,
-        limit: plan.keywordTitleChunkLimit
-      },
-      plan.keywordTitleDocumentLimit
-    )
-  ]);
+  const keywordMatches = await queryRetrievalRepository.fetchKeywordMatchedChunks(plan.keywordSearchQuery, {
+    jurisdictionId: plan.jurisdictionId,
+    chunkLimit: plan.keywordChunkLimit,
+    titleDocumentLimit: plan.keywordTitleDocumentLimit,
+    titleChunkLimit: plan.keywordTitleChunkLimit
+  });
 
-  const chunkCandidates = chunkMatches.map((record) => toKeywordCandidate(record, plan, false));
-  const titleCandidates = titleMatches.map((record) => toKeywordCandidate(record, plan, true));
+  const chunkCandidates = keywordMatches
+    .filter((record) => record.matchChannel === "chunk")
+    .map((record) => toKeywordCandidate(record, plan, false, record.rankScore));
+  const titleCandidates = keywordMatches
+    .filter((record) => record.matchChannel === "title")
+    .map((record) => toKeywordCandidate(record, plan, true, record.rankScore));
 
   return {
     method: "keyword",
     items: [...chunkCandidates, ...titleCandidates],
     deferred: false,
-    reason: `Keyword retrieval executed with ${chunkCandidates.length} chunk match(es) and ${titleCandidates.length} title-driven chunk match(es).`
+    reason: `Keyword retrieval executed with ${chunkCandidates.length} chunk match(es) and ${titleCandidates.length} title-driven chunk match(es) via single SQL path.`
   };
 }

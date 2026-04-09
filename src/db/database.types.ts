@@ -475,7 +475,47 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      retrieve_keyword_matches: {
+        Args: {
+          p_chunk_limit?: number
+          p_jurisdiction_id?: string
+          p_search_query: string
+          p_title_chunk_limit?: number
+          p_title_doc_limit?: number
+        }
+        Returns: {
+          chunk_id: string
+          content: string
+          document_id: string
+          document_title: string
+          match_channel: string
+          published_at: string
+          rank_score: number
+          source_name: string
+          source_type: string
+          url: string
+        }[]
+      }
+      retrieve_vector_matches: {
+        Args: {
+          p_candidate_limit?: number
+          p_jurisdiction_id?: string
+          p_match_count?: number
+          p_min_similarity?: number
+          p_query_embedding: string
+        }
+        Returns: {
+          chunk_id: string
+          content: string
+          document_id: string
+          document_title: string
+          published_at: string
+          similarity: number
+          source_name: string
+          source_type: string
+          url: string
+        }[]
+      }
     }
     Enums: {
       [_ in never]: never
