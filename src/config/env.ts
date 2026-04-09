@@ -15,10 +15,15 @@ const envSchema = z.object({
 
   UPSTASH_REDIS_REST_URL: z.string().optional(),
   UPSTASH_REDIS_REST_TOKEN: z.string().optional(),
+  QUERY_GUARDRAILS_MODE: z.enum(["auto", "enabled", "disabled"]).default("auto"),
 
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_CHAT_MODEL: z.string().default("gpt-5-mini"),
-  OPENAI_EMBEDDING_MODEL: z.string().default("text-embedding-3-small")
+  OPENAI_EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
+  OPENAI_SYNTHESIS_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+  OPENAI_SYNTHESIS_REASONING_EFFORT: z
+    .enum(["low", "medium", "high"])
+    .optional()
 });
 
 export const env = envSchema.parse(process.env);

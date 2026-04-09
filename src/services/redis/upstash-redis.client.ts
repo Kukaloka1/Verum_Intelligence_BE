@@ -12,6 +12,17 @@ interface UpstashRedisConfig {
 
 const UPSTASH_COMMAND_TIMEOUT_MS = 500;
 
+export type GuardrailsRuntimeStateReason =
+  | "mode_disabled"
+  | "mode_auto_non_production"
+  | "missing_redis_config"
+  | "enabled";
+
+export interface GuardrailsRuntimeState {
+  enabled: boolean;
+  reason: GuardrailsRuntimeStateReason;
+}
+
 export interface UpstashRedisClient {
   incr: (key: string) => Promise<number>;
   expire: (key: string, ttlSeconds: number) => Promise<boolean>;
@@ -20,14 +31,50 @@ export interface UpstashRedisClient {
 
 let redisClient: UpstashRedisClient | null | undefined;
 
-function getRedisConfig(): UpstashRedisConfig | null {
+function resolveGuardrailsRuntimeState(): GuardrailsRuntimeState {
+  if (env.QUERY_GUARDRAILS_MODE === "disabled") {
+    return {
+      enabled: false,
+      reason: "mode_disabled"
+    };
+  }
+
+  if (env.QUERY_GUARDRAILS_MODE === "auto" && env.NODE_ENV !== "production") {
+    return {
+      enabled: false,
+      reason: "mode_auto_non_production"
+    };
+  }
+
   if (!env.UPSTASH_REDIS_REST_URL || !env.UPSTASH_REDIS_REST_TOKEN) {
+    return {
+      enabled: false,
+      reason: "missing_redis_config"
+    };
+  }
+
+  return {
+    enabled: true,
+    reason: "enabled"
+  };
+}
+
+function getRedisConfig(): UpstashRedisConfig | null {
+  const runtimeState = resolveGuardrailsRuntimeState();
+  if (!runtimeState.enabled) {
+    return null;
+  }
+
+  const baseUrl = env.UPSTASH_REDIS_REST_URL;
+  const token = env.UPSTASH_REDIS_REST_TOKEN;
+
+  if (!baseUrl || !token) {
     return null;
   }
 
   return {
-    baseUrl: env.UPSTASH_REDIS_REST_URL.replace(/\/+$/, ""),
-    token: env.UPSTASH_REDIS_REST_TOKEN
+    baseUrl: baseUrl.replace(/\/+$/, ""),
+    token
   };
 }
 
@@ -108,4 +155,8 @@ export function getRedisClient(): UpstashRedisClient | null {
 
   redisClient = createRedisClient(config);
   return redisClient;
+}
+
+export function getGuardrailsRuntimeState(): GuardrailsRuntimeState {
+  return resolveGuardrailsRuntimeState();
 }

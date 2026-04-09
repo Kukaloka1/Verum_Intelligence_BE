@@ -5,12 +5,19 @@ import type {
   QueryAnswer,
   QueryCitation
 } from "@/modules/query/query.types";
+import { env } from "@/config/env";
 import { toErrorMessage } from "@/utils/errors";
 import { logError } from "@/utils/logger";
 import { getOpenAIClient } from "./openai.client";
 
-const MAX_OUTPUT_TOKENS = 1400;
-const OPENAI_SYNTHESIS_TIMEOUT_MS = 4500;
+const MAX_OUTPUT_TOKENS = 900;
+const DEFAULT_OPENAI_SYNTHESIS_TIMEOUT_MS = env.NODE_ENV === "production" ? 9000 : 14000;
+const OPENAI_SYNTHESIS_TIMEOUT_MS =
+  env.OPENAI_SYNTHESIS_TIMEOUT_MS ?? DEFAULT_OPENAI_SYNTHESIS_TIMEOUT_MS;
+const SYNTHESIS_MAX_EVIDENCE_ENTRIES = 4;
+const SYNTHESIS_MAX_CITATION_ENTRIES = 6;
+const SYNTHESIS_MAX_EXCERPT_CHARS = 220;
+const OPENAI_SYNTHESIS_REASONING_EFFORT = env.OPENAI_SYNTHESIS_REASONING_EFFORT ?? "low";
 
 const synthesisOutputSchema = z
   .object({
@@ -24,7 +31,7 @@ const synthesisOutputSchema = z
       )
       .min(1)
       .max(8),
-    limitations: z.string().trim().min(1).max(1600).optional()
+    limitations: z.union([z.string().trim().min(1).max(1600), z.null()])
   })
   .strict();
 
@@ -45,7 +52,9 @@ const synthesisJsonSchema = {
         required: ["sectionTitle", "content"]
       }
     },
-    limitations: { type: "string" }
+    limitations: {
+      anyOf: [{ type: "string" }, { type: "null" }]
+    }
   },
   required: ["summary", "body", "limitations"]
 } as const;
@@ -57,6 +66,7 @@ const SYSTEM_PROMPT = [
   "If evidence is limited, explicitly acknowledge limits in 'limitations'.",
   "Do not provide legal advice; provide source-backed informational synthesis.",
   "Keep tone concise, institutional, and non-chatty.",
+  "Return 2-4 sections in body unless evidence requires fewer.",
   "Return only JSON that matches the required schema."
 ].join(" ");
 
@@ -104,34 +114,56 @@ interface OpenAIResponsesCreatePayload {
   output?: OpenAIResponseOutputItem[];
 }
 
+type OpenAIReasoningEffort = "low" | "medium" | "high";
+
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
-function buildUserPrompt(input: QuerySynthesisInput): string {
-  const evidence = input.groundedContext.entries.map((entry, index) => ({
-    evidenceId: index + 1,
-    sourceName: entry.sourceName,
-    documentTitle: entry.documentTitle,
-    publishedAt: entry.publishedAt,
-    sourceType: entry.sourceType,
-    url: entry.url,
-    excerpt: entry.excerpt
-  }));
+function buildReasoningConfig(model: string): { effort: OpenAIReasoningEffort } | undefined {
+  if (!/^gpt-5/i.test(model)) {
+    return undefined;
+  }
 
-  const citationMetadata = input.citations.map((citation, index) => ({
-    citationId: index + 1,
-    sourceName: citation.sourceName,
-    documentTitle: citation.documentTitle,
-    publishedAt: citation.publishedAt,
-    sourceType: citation.sourceType,
-    url: citation.url
+  return {
+    effort: OPENAI_SYNTHESIS_REASONING_EFFORT
+  };
+}
+
+function clampExcerpt(excerpt: string): string {
+  const compact = excerpt.replace(/\s+/g, " ").trim();
+  if (compact.length <= SYNTHESIS_MAX_EXCERPT_CHARS) {
+    return compact;
+  }
+
+  return `${compact.slice(0, SYNTHESIS_MAX_EXCERPT_CHARS - 3)}...`;
+}
+
+function buildUserPrompt(input: QuerySynthesisInput): string {
+  const evidence = input.groundedContext.entries
+    .slice(0, SYNTHESIS_MAX_EVIDENCE_ENTRIES)
+    .map((entry, index) => ({
+      id: index + 1,
+      source: entry.sourceName,
+      title: entry.documentTitle,
+      date: entry.publishedAt,
+      type: entry.sourceType,
+      excerpt: clampExcerpt(entry.excerpt)
+    }));
+
+  const citationMetadata = input.citations.slice(0, SYNTHESIS_MAX_CITATION_ENTRIES).map((citation, index) => ({
+    id: index + 1,
+    source: citation.sourceName,
+    title: citation.documentTitle,
+    date: citation.publishedAt,
+    type: citation.sourceType
   }));
 
   return [
     "TASK: Produce a grounded, structured answer for a regulatory/compliance query.",
     `QUERY: ${input.normalizedInput.query}`,
     `JURISDICTION: ${input.normalizedInput.jurisdiction ?? "UNSCOPED"}`,
+    `EVIDENCE_COUNT: ${evidence.length}`,
     "GROUNDED_EVIDENCE_JSON:",
     JSON.stringify(evidence),
     "CITATION_METADATA_JSON:",
@@ -178,7 +210,20 @@ function extractOutputText(payload: OpenAIResponsesCreatePayload): { type: "outp
 
 function parseStructuredAnswer(outputText: string): QueryAnswer {
   const parsedJson = JSON.parse(outputText);
-  return synthesisOutputSchema.parse(parsedJson);
+  const structuredAnswer = synthesisOutputSchema.parse(parsedJson);
+
+  if (structuredAnswer.limitations === null) {
+    return {
+      summary: structuredAnswer.summary,
+      body: structuredAnswer.body
+    };
+  }
+
+  return {
+    summary: structuredAnswer.summary,
+    body: structuredAnswer.body,
+    limitations: structuredAnswer.limitations
+  };
 }
 
 export async function synthesizeGroundedAnswer(
@@ -208,6 +253,7 @@ export async function synthesizeGroundedAnswer(
         signal: controller.signal,
         body: JSON.stringify({
           model: client.chatModel,
+          reasoning: buildReasoningConfig(client.chatModel),
           input: [
             {
               role: "system",
