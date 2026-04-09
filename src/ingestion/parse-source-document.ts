@@ -1,5 +1,9 @@
 import { parseAdgmFsraConsultations, parseAdgmFsraGuidance } from "@/ingestion/parsers/adgm-parser";
-import { parseDfsaListingSource, parseDfsaListingSummaryOnly } from "@/ingestion/parsers/dfsa-parser";
+import {
+  parseDfsaListingSource,
+  parseDfsaListingSummaryOnly,
+  parseDfsaRulebookSection
+} from "@/ingestion/parsers/dfsa-parser";
 import type { FetchedSourceDocument, ParsedSourceRecord } from "./ingestion.types";
 
 export async function parseSourceDocument(
@@ -21,6 +25,10 @@ export async function parseSourceDocument(
 
     case "adgm_fsra_consultations":
       return parseAdgmFsraConsultations(fetchedDocument);
+
+    case "dfsa_rulebook_media_releases":
+    case "dfsa_rulebook_consultation_papers":
+      return parseDfsaRulebookSection(fetchedDocument);
 
     default:
       return [];

@@ -11,7 +11,7 @@ const DEMO_SOURCE_REGISTRY: IngestionSourceDefinition[] = [
     parser: "dfsa_news_listing",
     checkMethod: "poll",
     status: "active",
-    maxDocuments: 4
+    maxDocuments: 12
   },
   {
     slug: "dfsa-alerts",
@@ -23,7 +23,31 @@ const DEMO_SOURCE_REGISTRY: IngestionSourceDefinition[] = [
     parser: "dfsa_alert_listing",
     checkMethod: "poll",
     status: "active",
-    maxDocuments: 4
+    maxDocuments: 12
+  },
+  {
+    slug: "dfsa-rulebook-media-releases",
+    title: "DFSA Rulebook Media Releases",
+    url: "https://dfsaen.thomsonreuters.com/rulebook/media-releases",
+    sourceType: "media_release",
+    jurisdictionSlug: "difc",
+    regulatorSlug: "dfsa",
+    parser: "dfsa_rulebook_media_releases",
+    checkMethod: "poll",
+    status: "active",
+    maxDocuments: 12
+  },
+  {
+    slug: "dfsa-rulebook-past-consultation-papers",
+    title: "DFSA Rulebook Past Consultation Papers",
+    url: "https://dfsaen.thomsonreuters.com/rulebook/past-papers",
+    sourceType: "consultation_paper",
+    jurisdictionSlug: "difc",
+    regulatorSlug: "dfsa",
+    parser: "dfsa_rulebook_consultation_papers",
+    checkMethod: "poll",
+    status: "active",
+    maxDocuments: 12
   },
   {
     slug: "adgm-fsra-guidance",
@@ -35,7 +59,7 @@ const DEMO_SOURCE_REGISTRY: IngestionSourceDefinition[] = [
     parser: "adgm_fsra_guidance",
     checkMethod: "poll",
     status: "active",
-    maxDocuments: 4
+    maxDocuments: 12
   },
   {
     slug: "adgm-fsra-public-consultations",
@@ -47,7 +71,7 @@ const DEMO_SOURCE_REGISTRY: IngestionSourceDefinition[] = [
     parser: "adgm_fsra_consultations",
     checkMethod: "poll",
     status: "active",
-    maxDocuments: 4
+    maxDocuments: 12
   }
 ];
 

@@ -1,6 +1,8 @@
 export type IngestionParserKind =
   | "dfsa_news_listing"
   | "dfsa_alert_listing"
+  | "dfsa_rulebook_media_releases"
+  | "dfsa_rulebook_consultation_papers"
   | "adgm_fsra_guidance"
   | "adgm_fsra_consultations";
 
