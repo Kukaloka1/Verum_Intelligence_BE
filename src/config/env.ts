@@ -21,6 +21,7 @@ const envSchema = z.object({
   OPENAI_CHAT_MODEL: z.string().default("gpt-5-mini"),
   OPENAI_EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
   OPENAI_SYNTHESIS_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+  OPENAI_SYNTHESIS_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().optional(),
   OPENAI_SYNTHESIS_REASONING_EFFORT: z
     .enum(["low", "medium", "high"])
     .optional()

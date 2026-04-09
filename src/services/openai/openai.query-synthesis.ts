@@ -10,28 +10,30 @@ import { toErrorMessage } from "@/utils/errors";
 import { logError } from "@/utils/logger";
 import { getOpenAIClient } from "./openai.client";
 
-const MAX_OUTPUT_TOKENS = 900;
+const DEFAULT_OPENAI_SYNTHESIS_MAX_OUTPUT_TOKENS = 1200;
+const MAX_OUTPUT_TOKENS =
+  env.OPENAI_SYNTHESIS_MAX_OUTPUT_TOKENS ?? DEFAULT_OPENAI_SYNTHESIS_MAX_OUTPUT_TOKENS;
 const DEFAULT_OPENAI_SYNTHESIS_TIMEOUT_MS = env.NODE_ENV === "production" ? 9000 : 14000;
 const OPENAI_SYNTHESIS_TIMEOUT_MS =
   env.OPENAI_SYNTHESIS_TIMEOUT_MS ?? DEFAULT_OPENAI_SYNTHESIS_TIMEOUT_MS;
-const SYNTHESIS_MAX_EVIDENCE_ENTRIES = 4;
-const SYNTHESIS_MAX_CITATION_ENTRIES = 6;
-const SYNTHESIS_MAX_EXCERPT_CHARS = 220;
+const SYNTHESIS_MAX_EVIDENCE_ENTRIES = 3;
+const SYNTHESIS_MAX_CITATION_ENTRIES = 4;
+const SYNTHESIS_MAX_EXCERPT_CHARS = 180;
 const OPENAI_SYNTHESIS_REASONING_EFFORT = env.OPENAI_SYNTHESIS_REASONING_EFFORT ?? "low";
 
 const synthesisOutputSchema = z
   .object({
-    summary: z.string().trim().min(1).max(1600),
+    summary: z.string().trim().min(1).max(800),
     body: z
       .array(
         z.object({
-          sectionTitle: z.string().trim().min(1).max(140),
-          content: z.string().trim().min(1).max(3000)
+          sectionTitle: z.string().trim().min(1).max(90),
+          content: z.string().trim().min(1).max(900)
         })
       )
       .min(1)
-      .max(8),
-    limitations: z.union([z.string().trim().min(1).max(1600), z.null()])
+      .max(4),
+    limitations: z.union([z.string().trim().min(1).max(500), z.null()])
   })
   .strict();
 
@@ -39,21 +41,22 @@ const synthesisJsonSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    summary: { type: "string" },
+    summary: { type: "string", maxLength: 800 },
     body: {
       type: "array",
+      maxItems: 4,
       items: {
         type: "object",
         additionalProperties: false,
         properties: {
-          sectionTitle: { type: "string" },
-          content: { type: "string" }
+          sectionTitle: { type: "string", maxLength: 90 },
+          content: { type: "string", maxLength: 900 }
         },
         required: ["sectionTitle", "content"]
       }
     },
     limitations: {
-      anyOf: [{ type: "string" }, { type: "null" }]
+      anyOf: [{ type: "string", maxLength: 500 }, { type: "null" }]
     }
   },
   required: ["summary", "body", "limitations"]
@@ -66,7 +69,9 @@ const SYSTEM_PROMPT = [
   "If evidence is limited, explicitly acknowledge limits in 'limitations'.",
   "Do not provide legal advice; provide source-backed informational synthesis.",
   "Keep tone concise, institutional, and non-chatty.",
-  "Return 2-4 sections in body unless evidence requires fewer.",
+  "Return 2-3 sections in body unless evidence requires fewer.",
+  "Keep summary under 90 words and each section content under 130 words.",
+  "Do not repeat the same citation context across sections.",
   "Return only JSON that matches the required schema."
 ].join(" ");
 
@@ -151,13 +156,13 @@ function buildUserPrompt(input: QuerySynthesisInput): string {
       excerpt: clampExcerpt(entry.excerpt)
     }));
 
-  const citationMetadata = input.citations.slice(0, SYNTHESIS_MAX_CITATION_ENTRIES).map((citation, index) => ({
-    id: index + 1,
-    source: citation.sourceName,
-    title: citation.documentTitle,
-    date: citation.publishedAt,
-    type: citation.sourceType
-  }));
+  const citationMetadata = input.citations
+    .slice(0, SYNTHESIS_MAX_CITATION_ENTRIES)
+    .map((citation, index) => ({
+      id: index + 1,
+      source: citation.sourceName,
+      title: citation.documentTitle
+    }));
 
   return [
     "TASK: Produce a grounded, structured answer for a regulatory/compliance query.",
@@ -168,7 +173,8 @@ function buildUserPrompt(input: QuerySynthesisInput): string {
     JSON.stringify(evidence),
     "CITATION_METADATA_JSON:",
     JSON.stringify(citationMetadata),
-    "Use only the provided evidence and citation metadata."
+    "Use only the provided evidence and citation metadata.",
+    "Keep output concise and avoid repeating overlapping evidence verbatim."
   ].join("\n");
 }
 
