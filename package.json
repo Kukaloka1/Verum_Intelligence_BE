@@ -8,7 +8,8 @@
     "build": "tsup src/server.ts --format esm --target node22 --out-dir dist --clean",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "ingest:demo-corpus": "tsx src/jobs/poll-official-sources.ts"
+    "ingest:demo-corpus": "tsx src/jobs/poll-official-sources.ts",
+    "smoke:embedding-dimension": "tsx src/jobs/smoke-embedding-dimension.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

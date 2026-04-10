@@ -9,6 +9,57 @@ const DEFAULT_OPENAI_EMBEDDING_TIMEOUT_MS = 7000;
 const OPENAI_EMBEDDING_TIMEOUT_MS =
   env.OPENAI_EMBEDDING_TIMEOUT_MS ?? DEFAULT_OPENAI_EMBEDDING_TIMEOUT_MS;
 const OPENAI_EMBEDDING_TIMEOUT_RETRIES = env.OPENAI_EMBEDDING_TIMEOUT_RETRIES ?? 1;
+const KNOWN_EMBEDDING_MODEL_DIMENSIONS: Record<string, number> = {
+  "text-embedding-3-small": 1536,
+  "text-embedding-3-large": 3072,
+  "text-embedding-ada-002": 1536
+};
+
+type EmbeddingDimensionSource = "env_override" | "known_model" | "unknown";
+
+export interface EmbeddingModelDimensionInfo {
+  model: string;
+  expectedDimension: number | null;
+  source: EmbeddingDimensionSource;
+}
+
+function getExpectedDimensionForModel(model: string): number | null {
+  const override = env.OPENAI_EMBEDDING_DIMENSION;
+  if (typeof override === "number" && Number.isInteger(override) && override > 0) {
+    return override;
+  }
+
+  return KNOWN_EMBEDDING_MODEL_DIMENSIONS[model] ?? null;
+}
+
+export function getEmbeddingModelDimensionInfo(model: string): EmbeddingModelDimensionInfo {
+  const expectedDimension = getExpectedDimensionForModel(model);
+  if (typeof env.OPENAI_EMBEDDING_DIMENSION === "number") {
+    return {
+      model,
+      expectedDimension,
+      source: "env_override"
+    };
+  }
+
+  if (KNOWN_EMBEDDING_MODEL_DIMENSIONS[model]) {
+    return {
+      model,
+      expectedDimension,
+      source: "known_model"
+    };
+  }
+
+  return {
+    model,
+    expectedDimension,
+    source: "unknown"
+  };
+}
+
+export function getConfiguredEmbeddingModelInfo(): EmbeddingModelDimensionInfo {
+  return getEmbeddingModelDimensionInfo(env.OPENAI_EMBEDDING_MODEL);
+}
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
@@ -31,6 +82,7 @@ export async function createEmbedding(input: string): Promise<number[] | null> {
   if (!client) {
     return null;
   }
+  const modelDimensionInfo = getEmbeddingModelDimensionInfo(client.embeddingModel);
 
   let lastTimeoutError: Error | null = null;
   const maxAttempts = OPENAI_EMBEDDING_TIMEOUT_RETRIES + 1;
@@ -78,7 +130,18 @@ export async function createEmbedding(input: string): Promise<number[] | null> {
 
     const payload = (await response.json()) as OpenAIEmbeddingResponse;
     const embedding = payload.data?.[0]?.embedding;
-    return ensureEmbeddingVector(embedding);
+    const vector = ensureEmbeddingVector(embedding);
+
+    if (
+      typeof modelDimensionInfo.expectedDimension === "number" &&
+      vector.length !== modelDimensionInfo.expectedDimension
+    ) {
+      throw new Error(
+        `Embedding dimension mismatch for configured model '${client.embeddingModel}'. Expected ${modelDimensionInfo.expectedDimension} (${modelDimensionInfo.source}), received ${vector.length}.`
+      );
+    }
+
+    return vector;
   }
 
   if (lastTimeoutError) {

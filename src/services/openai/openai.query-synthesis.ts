@@ -10,30 +10,30 @@ import { toErrorMessage } from "@/utils/errors";
 import { logError } from "@/utils/logger";
 import { getOpenAIClient } from "./openai.client";
 
-const DEFAULT_OPENAI_SYNTHESIS_MAX_OUTPUT_TOKENS = 1200;
+const DEFAULT_OPENAI_SYNTHESIS_MAX_OUTPUT_TOKENS = 900;
 const MAX_OUTPUT_TOKENS =
   env.OPENAI_SYNTHESIS_MAX_OUTPUT_TOKENS ?? DEFAULT_OPENAI_SYNTHESIS_MAX_OUTPUT_TOKENS;
 const DEFAULT_OPENAI_SYNTHESIS_TIMEOUT_MS = env.NODE_ENV === "production" ? 9000 : 14000;
 const OPENAI_SYNTHESIS_TIMEOUT_MS =
   env.OPENAI_SYNTHESIS_TIMEOUT_MS ?? DEFAULT_OPENAI_SYNTHESIS_TIMEOUT_MS;
-const SYNTHESIS_MAX_EVIDENCE_ENTRIES = 3;
-const SYNTHESIS_MAX_CITATION_ENTRIES = 4;
-const SYNTHESIS_MAX_EXCERPT_CHARS = 180;
+const SYNTHESIS_MAX_EVIDENCE_ENTRIES = env.OPENAI_SYNTHESIS_MAX_EVIDENCE_ENTRIES ?? 2;
+const SYNTHESIS_MAX_CITATION_ENTRIES = env.OPENAI_SYNTHESIS_MAX_CITATION_ENTRIES ?? 2;
+const SYNTHESIS_MAX_EXCERPT_CHARS = env.OPENAI_SYNTHESIS_MAX_EXCERPT_CHARS ?? 120;
 const OPENAI_SYNTHESIS_REASONING_EFFORT = env.OPENAI_SYNTHESIS_REASONING_EFFORT ?? "low";
 
 const synthesisOutputSchema = z
   .object({
-    summary: z.string().trim().min(1).max(800),
+    summary: z.string().trim().min(1).max(500),
     body: z
       .array(
         z.object({
-          sectionTitle: z.string().trim().min(1).max(90),
-          content: z.string().trim().min(1).max(900)
+          sectionTitle: z.string().trim().min(1).max(72),
+          content: z.string().trim().min(1).max(520)
         })
       )
       .min(1)
-      .max(4),
-    limitations: z.union([z.string().trim().min(1).max(500), z.null()])
+      .max(3),
+    limitations: z.union([z.string().trim().min(1).max(360), z.null()])
   })
   .strict();
 
@@ -41,37 +41,34 @@ const synthesisJsonSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    summary: { type: "string", maxLength: 800 },
+    summary: { type: "string", maxLength: 500 },
     body: {
       type: "array",
-      maxItems: 4,
+      maxItems: 3,
       items: {
         type: "object",
         additionalProperties: false,
         properties: {
-          sectionTitle: { type: "string", maxLength: 90 },
-          content: { type: "string", maxLength: 900 }
+          sectionTitle: { type: "string", maxLength: 72 },
+          content: { type: "string", maxLength: 520 }
         },
         required: ["sectionTitle", "content"]
       }
     },
     limitations: {
-      anyOf: [{ type: "string", maxLength: 500 }, { type: "null" }]
+      anyOf: [{ type: "string", maxLength: 360 }, { type: "null" }]
     }
   },
   required: ["summary", "body", "limitations"]
 } as const;
 
 const SYSTEM_PROMPT = [
-  "You are Verum Intelligence backend synthesis for legal/regulatory research.",
-  "Use only the GROUNDED_EVIDENCE and CITATION_METADATA provided by the backend.",
-  "Never invent legal obligations, facts, sources, or regulator positions.",
-  "If evidence is limited, explicitly acknowledge limits in 'limitations'.",
-  "Do not provide legal advice; provide source-backed informational synthesis.",
-  "Keep tone concise, institutional, and non-chatty.",
-  "Return 2-3 sections in body unless evidence requires fewer.",
-  "Keep summary under 90 words and each section content under 130 words.",
-  "Do not repeat the same citation context across sections.",
+  "You are Verum Intelligence grounded synthesis for regulatory research.",
+  "Use only evidence lines and citation lines provided in the prompt.",
+  "Do not invent claims, obligations, dates, or sources.",
+  "If support is limited, state scope limits in 'limitations'.",
+  "Tone must be concise, institutional, and non-chatty.",
+  "Return at most 3 sections and avoid repetition.",
   "Return only JSON that matches the required schema."
 ].join(" ");
 
@@ -145,36 +142,30 @@ function clampExcerpt(excerpt: string): string {
 }
 
 function buildUserPrompt(input: QuerySynthesisInput): string {
-  const evidence = input.groundedContext.entries
+  const evidenceLines = input.groundedContext.entries
     .slice(0, SYNTHESIS_MAX_EVIDENCE_ENTRIES)
-    .map((entry, index) => ({
-      id: index + 1,
-      source: entry.sourceName,
-      title: entry.documentTitle,
-      date: entry.publishedAt,
-      type: entry.sourceType,
-      excerpt: clampExcerpt(entry.excerpt)
-    }));
+    .map((entry, index) => {
+      const date = entry.publishedAt ?? "n/a";
+      const sourceType = entry.sourceType ?? "n/a";
+      return `E${index + 1}|${entry.sourceName}|${entry.documentTitle}|${date}|${sourceType}|${clampExcerpt(
+        entry.excerpt
+      )}`;
+    });
 
-  const citationMetadata = input.citations
+  const citationLines = input.citations
     .slice(0, SYNTHESIS_MAX_CITATION_ENTRIES)
-    .map((citation, index) => ({
-      id: index + 1,
-      source: citation.sourceName,
-      title: citation.documentTitle
-    }));
+    .map((citation, index) => `C${index + 1}|${citation.sourceName}|${citation.documentTitle}`);
 
   return [
-    "TASK: Produce a grounded, structured answer for a regulatory/compliance query.",
+    "TASK: Produce a grounded structured answer.",
     `QUERY: ${input.normalizedInput.query}`,
     `JURISDICTION: ${input.normalizedInput.jurisdiction ?? "UNSCOPED"}`,
-    `EVIDENCE_COUNT: ${evidence.length}`,
-    "GROUNDED_EVIDENCE_JSON:",
-    JSON.stringify(evidence),
-    "CITATION_METADATA_JSON:",
-    JSON.stringify(citationMetadata),
-    "Use only the provided evidence and citation metadata.",
-    "Keep output concise and avoid repeating overlapping evidence verbatim."
+    `EVIDENCE_COUNT: ${evidenceLines.length}`,
+    "EVIDENCE_LINES:",
+    evidenceLines.join("\n"),
+    "CITATION_LINES:",
+    citationLines.join("\n"),
+    "Use only these lines. Do not add external knowledge."
   ].join("\n");
 }
 

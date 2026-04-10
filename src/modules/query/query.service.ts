@@ -180,7 +180,8 @@ export function createQueryService(overrides: Partial<QueryServiceDependencies> 
         execute: () => dependencies.retrieveByVector(retrievalPlan),
         buildMeta: (result) => ({
           items: result.items.length,
-          deferred: result.deferred
+          deferred: result.deferred,
+          reason: result.deferred ? result.reason : undefined
         })
       });
       const keywordPromise = measureAsyncStage({
@@ -189,7 +190,8 @@ export function createQueryService(overrides: Partial<QueryServiceDependencies> 
         execute: () => dependencies.retrieveByKeyword(retrievalPlan),
         buildMeta: (result) => ({
           items: result.items.length,
-          deferred: result.deferred
+          deferred: result.deferred,
+          reason: result.deferred ? result.reason : undefined
         })
       });
 

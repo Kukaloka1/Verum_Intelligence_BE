@@ -30,6 +30,22 @@ interface VectorMatchRecord extends RetrievalChunkRecord {
   similarity: number;
 }
 
+export interface CorpusEmbeddingDimensionSummary {
+  detectedDimension: number | null;
+  distinctDimensions: number[];
+  sampledRows: number;
+  mixedDimensions: boolean;
+}
+
+interface EmbeddingDimensionCacheEntry {
+  cachedAt: number;
+  summary: CorpusEmbeddingDimensionSummary;
+}
+
+const EMBEDDING_DIMENSION_SAMPLE_LIMIT = 24;
+const EMBEDDING_DIMENSION_CACHE_TTL_MS = 5 * 60 * 1000;
+const embeddingDimensionCache = new Map<string, EmbeddingDimensionCacheEntry>();
+
 function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
@@ -131,6 +147,69 @@ function toPgVectorLiteral(embedding: number[]): string {
   return `[${embedding.join(",")}]`;
 }
 
+function parsePgVectorDimension(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
+    return null;
+  }
+
+  const inner = trimmed.slice(1, -1).trim();
+  if (inner.length === 0) {
+    return 0;
+  }
+
+  return inner.split(",").length;
+}
+
+function getDimensionCacheKey(jurisdictionId: string | null): string {
+  return jurisdictionId ?? "__all__";
+}
+
+async function inspectCorpusEmbeddingDimensions(input: {
+  jurisdictionId: string | null;
+}): Promise<CorpusEmbeddingDimensionSummary> {
+  const cacheKey = getDimensionCacheKey(input.jurisdictionId);
+  const now = Date.now();
+  const cached = embeddingDimensionCache.get(cacheKey);
+  if (cached && now - cached.cachedAt <= EMBEDDING_DIMENSION_CACHE_TTL_MS) {
+    return cached.summary;
+  }
+
+  const db = getDbClient();
+  let query = db
+    .from("chunks")
+    .select("embedding")
+    .not("embedding", "is", null)
+    .limit(EMBEDDING_DIMENSION_SAMPLE_LIMIT);
+
+  if (input.jurisdictionId) {
+    query = query.eq("jurisdiction_id", input.jurisdictionId);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    throw new Error(`Embedding dimension inspection failed: ${error.message}`);
+  }
+
+  const dimensions = (data ?? [])
+    .map((row) => (typeof row.embedding === "string" ? parsePgVectorDimension(row.embedding) : null))
+    .filter((dimension): dimension is number => typeof dimension === "number");
+
+  const distinctDimensions = Array.from(new Set(dimensions)).sort((a, b) => a - b);
+  const summary: CorpusEmbeddingDimensionSummary = {
+    detectedDimension: distinctDimensions.length === 1 ? distinctDimensions[0] : null,
+    distinctDimensions,
+    sampledRows: dimensions.length,
+    mixedDimensions: distinctDimensions.length > 1
+  };
+
+  embeddingDimensionCache.set(cacheKey, {
+    cachedAt: now,
+    summary
+  });
+  return summary;
+}
+
 async function resolveJurisdiction(jurisdictionInput: string): Promise<JurisdictionRecord | null> {
   const db = getDbClient();
   const slug = jurisdictionInput.toLowerCase();
@@ -211,5 +290,6 @@ async function fetchVectorMatchedChunks(
 export const queryRetrievalRepository = {
   resolveJurisdiction,
   fetchKeywordMatchedChunks,
-  fetchVectorMatchedChunks
+  fetchVectorMatchedChunks,
+  inspectCorpusEmbeddingDimensions
 };

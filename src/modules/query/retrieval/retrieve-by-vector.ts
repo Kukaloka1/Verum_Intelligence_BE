@@ -1,5 +1,9 @@
 import { queryRetrievalRepository } from "@/repositories/query-retrieval.repository";
-import { createEmbedding } from "@/services/openai/openai.embeddings";
+import {
+  createEmbedding,
+  getConfiguredEmbeddingModelInfo
+} from "@/services/openai/openai.embeddings";
+import { logError } from "@/utils/logger";
 import type {
   RetrievalBranchResult,
   RetrievalChunkRecord,
@@ -42,6 +46,57 @@ function getMatchedTermsFromContent(content: string, hints: string[]): string[] 
 }
 
 export async function retrieveByVector(plan: RetrievalPlan): Promise<RetrievalBranchResult> {
+  const modelDimensionInfo = getConfiguredEmbeddingModelInfo();
+  const corpusEmbeddingSummary = await queryRetrievalRepository.inspectCorpusEmbeddingDimensions({
+    jurisdictionId: plan.jurisdictionId
+  });
+
+  if (corpusEmbeddingSummary.sampledRows === 0) {
+    return {
+      method: "vector",
+      items: [],
+      deferred: true,
+      reason: "Vector retrieval deferred because the current corpus scope has no embedded chunks."
+    };
+  }
+
+  if (corpusEmbeddingSummary.mixedDimensions) {
+    const reason = `Vector retrieval deferred due to mixed corpus embedding dimensions (${corpusEmbeddingSummary.distinctDimensions.join(
+      ", "
+    )}) in sampled chunks.`;
+    logError("Vector retrieval blocked by mixed corpus embedding dimensions", {
+      jurisdictionId: plan.jurisdictionId,
+      distinctDimensions: corpusEmbeddingSummary.distinctDimensions
+    });
+    return {
+      method: "vector",
+      items: [],
+      deferred: true,
+      reason
+    };
+  }
+
+  if (
+    typeof modelDimensionInfo.expectedDimension === "number" &&
+    typeof corpusEmbeddingSummary.detectedDimension === "number" &&
+    modelDimensionInfo.expectedDimension !== corpusEmbeddingSummary.detectedDimension
+  ) {
+    const reason = `Vector retrieval deferred due to embedding model/corpus dimension mismatch (model '${modelDimensionInfo.model}' expects ${modelDimensionInfo.expectedDimension}, corpus has ${corpusEmbeddingSummary.detectedDimension}).`;
+    logError("Vector retrieval blocked by embedding model/corpus dimension mismatch", {
+      model: modelDimensionInfo.model,
+      expectedDimension: modelDimensionInfo.expectedDimension,
+      expectedSource: modelDimensionInfo.source,
+      corpusDimension: corpusEmbeddingSummary.detectedDimension,
+      jurisdictionId: plan.jurisdictionId
+    });
+    return {
+      method: "vector",
+      items: [],
+      deferred: true,
+      reason
+    };
+  }
+
   const queryEmbedding = await createEmbedding(plan.normalizedQuery);
   if (!queryEmbedding) {
     return {
@@ -49,6 +104,27 @@ export async function retrieveByVector(plan: RetrievalPlan): Promise<RetrievalBr
       items: [],
       deferred: true,
       reason: "Vector retrieval deferred because query embedding could not be generated (missing or unavailable OpenAI config)."
+    };
+  }
+
+  if (
+    typeof corpusEmbeddingSummary.detectedDimension === "number" &&
+    queryEmbedding.length !== corpusEmbeddingSummary.detectedDimension
+  ) {
+    const reason = `Vector retrieval deferred due to query/corpus embedding mismatch (query=${queryEmbedding.length}, corpus=${corpusEmbeddingSummary.detectedDimension}).`;
+    logError("Vector retrieval blocked by query/corpus embedding mismatch", {
+      model: modelDimensionInfo.model,
+      expectedModelDimension: modelDimensionInfo.expectedDimension,
+      expectedSource: modelDimensionInfo.source,
+      queryDimension: queryEmbedding.length,
+      corpusDimension: corpusEmbeddingSummary.detectedDimension,
+      jurisdictionId: plan.jurisdictionId
+    });
+    return {
+      method: "vector",
+      items: [],
+      deferred: true,
+      reason
     };
   }
 
