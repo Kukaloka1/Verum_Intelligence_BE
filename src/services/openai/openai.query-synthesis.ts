@@ -74,10 +74,14 @@ const SYSTEM_PROMPT = [
   "STYLE:",
   "Write in an institutional, analytical, executive tone.",
   "Be concise, precise, and useful.",
+  "Write in English only.",
+  "Use plain professional English with clean punctuation.",
+  "Do not include non-English words or non-Latin characters in the answer body.",
   "Do not sound chatty, apologetic, uncertain-by-default, or disclaimer-heavy.",
   "Inside each section content, use short readable paragraphs separated by blank lines.",
   "Use numbered points when helpful for clarity.",
   "If you use ordered points, keep numbering sequential (1, 2, 3...) and do not restart numbering inside the same section.",
+  "Each section must be complete and coherent; do not end mid-sentence, mid-list item, or mid-word.",
   "Use selective markdown bold for key terms only (for example **obligation**, **effective date**, **scope**).",
   "Never bold entire sentences or whole paragraphs.",
 
@@ -268,19 +272,47 @@ function extractOutputText(payload: OpenAIResponsesCreatePayload): { type: "outp
 function parseStructuredAnswer(outputText: string): QueryAnswer {
   const parsedJson = JSON.parse(outputText);
   const structuredAnswer = synthesisOutputSchema.parse(parsedJson);
+  const sanitizedSummary = sanitizeGeneratedText(structuredAnswer.summary);
+  const sanitizedBody = structuredAnswer.body.map((section) => ({
+    sectionTitle: sanitizeGeneratedText(section.sectionTitle),
+    content: sanitizeGeneratedText(section.content)
+  }));
+  const sanitizedLimitations =
+    structuredAnswer.limitations === null
+      ? null
+      : sanitizeGeneratedText(structuredAnswer.limitations);
 
-  if (structuredAnswer.limitations === null) {
+  if (sanitizedLimitations === null) {
     return {
-      summary: structuredAnswer.summary,
-      body: structuredAnswer.body
+      summary: sanitizedSummary,
+      body: sanitizedBody
     };
   }
 
   return {
-    summary: structuredAnswer.summary,
-    body: structuredAnswer.body,
-    limitations: structuredAnswer.limitations
+    summary: sanitizedSummary,
+    body: sanitizedBody,
+    limitations: sanitizedLimitations
   };
+}
+
+function sanitizeGeneratedText(value: string): string {
+  const normalized = value.normalize("NFKC");
+  const withoutControlChars = normalized
+    .replace(/[^\S\r\n]+/g, " ")
+    .replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, " ");
+  const latinOnly = withoutControlChars.replace(
+    /[^\p{Script=Latin}\p{Number}\p{Punctuation}\p{Separator}\n]/gu,
+    " "
+  );
+  const compacted = latinOnly
+    .split("\n")
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return compacted.length > 0 ? compacted : value.trim();
 }
 
 export async function synthesizeGroundedAnswer(

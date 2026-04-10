@@ -19,6 +19,7 @@ export type QuerySuccessStatus = QuerySuccessResponse["resultStatus"];
 export type QueryErrorStatus = QueryErrorResponse["resultStatus"];
 export type QueryResultStatus = QueryResponse["resultStatus"];
 export type QueryRateLimitedCode = "RATE_LIMITED" | "DUPLICATE_QUERY_SUBMISSION";
+export type QuerySynthesisTraceStatus = "complete" | "partial" | "not_produced";
 
 export type RetrievalMethod = "vector" | "keyword";
 
@@ -95,6 +96,7 @@ export interface GeneratedAnswerResult {
   resultStatus: QuerySuccessStatus;
   answer: QueryAnswer;
   sourcesUsed: number;
+  synthesisStatus: QuerySynthesisTraceStatus;
 }
 
 export interface QueryExecutionResult {

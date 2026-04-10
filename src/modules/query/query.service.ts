@@ -9,6 +9,7 @@ import type {
   QueryRateLimitedCode,
   QueryRequestBody,
   NormalizedQueryInput,
+  RetrievalBranchResult,
   QuerySuccessResponse,
   ValidationErrorContext
 } from "./query.types";
@@ -50,6 +51,8 @@ interface QueryStageTiming {
   meta?: Record<string, unknown>;
 }
 
+type EmbeddingLayerTraceStatus = "ready" | "deferred" | "mismatch" | "not_reported";
+
 const defaultDependencies: QueryServiceDependencies = {
   normalizeQueryInput: normalizeQueryInputHook,
   buildRetrievalPlan: buildRetrievalPlanHook,
@@ -90,6 +93,142 @@ function sanitizeMeta(meta?: Record<string, unknown>): Record<string, unknown> |
   }
 
   return meta;
+}
+
+function extractDeferredReasonCode(result: RetrievalBranchResult): string | null {
+  const code = result.diagnostics?.deferredReasonCode;
+  if (typeof code !== "string") {
+    return null;
+  }
+
+  const trimmed = code.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function asObjectRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function asNonEmptyStringOrNull(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function asPositiveIntOrNull(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    return null;
+  }
+
+  return value;
+}
+
+function resolveEmbeddingLayerTrace(vectorResult: RetrievalBranchResult): {
+  status: EmbeddingLayerTraceStatus;
+  model: string | null;
+  dimension: number | null;
+  deferredReasonCode: string | null;
+} {
+  const diagnostics = asObjectRecord(vectorResult.diagnostics);
+  const embedding = asObjectRecord(diagnostics?.embedding);
+  const deferredReasonCode = extractDeferredReasonCode(vectorResult);
+
+  const model =
+    asNonEmptyStringOrNull(embedding?.model) ??
+    asNonEmptyStringOrNull(diagnostics?.embeddingModel) ??
+    null;
+  const expectedFromEmbedding = asPositiveIntOrNull(embedding?.expectedDimension);
+  const actualFromEmbedding = asPositiveIntOrNull(embedding?.actualDimension);
+  const expectedFromDiagnostics = asPositiveIntOrNull(diagnostics?.expectedDimension);
+  const dimension = actualFromEmbedding ?? expectedFromEmbedding ?? expectedFromDiagnostics;
+
+  const expectedForComparison = expectedFromEmbedding ?? expectedFromDiagnostics;
+  if (
+    actualFromEmbedding !== null &&
+    expectedForComparison !== null &&
+    actualFromEmbedding !== expectedForComparison
+  ) {
+    return {
+      status: "mismatch",
+      model,
+      dimension,
+      deferredReasonCode
+    };
+  }
+
+  const embeddingStatus = asNonEmptyStringOrNull(embedding?.status);
+  if (embeddingStatus === "ok") {
+    return {
+      status: "ready",
+      model,
+      dimension,
+      deferredReasonCode
+    };
+  }
+
+  if (embeddingStatus === "failed") {
+    const failure = asNonEmptyStringOrNull(embedding?.failure);
+    return {
+      status: failure === "dimension_mismatch" ? "mismatch" : "deferred",
+      model,
+      dimension,
+      deferredReasonCode
+    };
+  }
+
+  if (vectorResult.deferred) {
+    return {
+      status: deferredReasonCode?.includes("mismatch") ? "mismatch" : "deferred",
+      model,
+      dimension,
+      deferredReasonCode
+    };
+  }
+
+  return {
+    status: "not_reported",
+    model,
+    dimension,
+    deferredReasonCode
+  };
+}
+
+function buildTracePayload(input: {
+  vectorResult: RetrievalBranchResult;
+  keywordResult: RetrievalBranchResult;
+  groundedSources: number;
+  synthesisStatus: "complete" | "partial" | "not_produced";
+  jurisdiction: string | null;
+}) {
+  return {
+    vectorRetrieval: {
+      matches: input.vectorResult.items.length,
+      deferred: input.vectorResult.deferred,
+      deferredReason: input.vectorResult.deferred ? input.vectorResult.reason : null,
+      deferredReasonCode: extractDeferredReasonCode(input.vectorResult)
+    },
+    keywordRetrieval: {
+      matches: input.keywordResult.items.length,
+      deferred: input.keywordResult.deferred,
+      deferredReason: input.keywordResult.deferred ? input.keywordResult.reason : null,
+      deferredReasonCode: extractDeferredReasonCode(input.keywordResult)
+    },
+    embeddingLayer: resolveEmbeddingLayerTrace(input.vectorResult),
+    groundedSources: input.groundedSources,
+    synthesis: {
+      status: input.synthesisStatus
+    },
+    scope: {
+      jurisdiction: input.jurisdiction
+    }
+  };
 }
 
 function measureSyncStage<T>(input: {
@@ -285,11 +424,19 @@ export function createQueryService(overrides: Partial<QueryServiceDependencies> 
             jurisdiction: normalizedInput.jurisdiction,
             answer: generatedAnswer.answer,
             citations,
-            sourcesUsed: generatedAnswer.sourcesUsed
+            sourcesUsed: generatedAnswer.sourcesUsed,
+            trace: buildTracePayload({
+              vectorResult,
+              keywordResult,
+              groundedSources: generatedAnswer.sourcesUsed,
+              synthesisStatus: generatedAnswer.synthesisStatus,
+              jurisdiction: normalizedInput.jurisdiction
+            })
           }),
         buildMeta: (value) => ({
           resultStatus: value.resultStatus,
-          sourcesUsed: value.sourcesUsed
+          sourcesUsed: value.sourcesUsed,
+          trace: value.trace
         })
       });
 

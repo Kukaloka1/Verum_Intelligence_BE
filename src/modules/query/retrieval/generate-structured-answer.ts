@@ -70,7 +70,8 @@ function buildSynthesisUnavailableAnswer(
       body: fallbackBody,
       limitations
     },
-    sourcesUsed: groundedContext.entries.length
+    sourcesUsed: groundedContext.entries.length,
+    synthesisStatus: "partial"
   };
 }
 
@@ -84,7 +85,8 @@ export async function generateStructuredAnswer({
     return {
       resultStatus: "no_results",
       answer: buildNoResultsAnswer(normalizedInput),
-      sourcesUsed: 0
+      sourcesUsed: 0,
+      synthesisStatus: "not_produced"
     };
   }
 
@@ -128,6 +130,7 @@ export async function generateStructuredAnswer({
   return {
     resultStatus,
     answer,
-    sourcesUsed: citations.length
+    sourcesUsed: citations.length,
+    synthesisStatus: resultStatus === "success" ? "complete" : "partial"
   };
 }
