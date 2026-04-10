@@ -21,6 +21,14 @@ interface CachedJurisdictionLookup {
 
 const jurisdictionLookupCache = new Map<string, CachedJurisdictionLookup>();
 
+interface JurisdictionPrewarmResult {
+  input: string;
+  cacheKey: string;
+  jurisdictionId: string | null;
+  ok: boolean;
+  reason: string;
+}
+
 function extractKeywordHints(query: string): string[] {
   return Array.from(
     new Set(
@@ -54,6 +62,58 @@ async function resolveJurisdictionWithCache(jurisdictionInput: string) {
   });
 
   return resolved;
+}
+
+export async function prewarmJurisdictionLookupCache(
+  jurisdictionInputs: string[]
+): Promise<JurisdictionPrewarmResult[]> {
+  const uniqueInputs = Array.from(
+    new Set(
+      jurisdictionInputs
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0)
+    )
+  );
+
+  const results: JurisdictionPrewarmResult[] = [];
+  for (const input of uniqueInputs) {
+    const cacheKey = input.toLowerCase();
+    const existing = jurisdictionLookupCache.get(cacheKey);
+    const cacheIsFresh =
+      existing !== undefined && Date.now() - existing.cachedAt <= JURISDICTION_CACHE_TTL_MS;
+
+    if (cacheIsFresh) {
+      results.push({
+        input,
+        cacheKey,
+        jurisdictionId: existing.value?.id ?? null,
+        ok: true,
+        reason: "cache_hit"
+      });
+      continue;
+    }
+
+    try {
+      const resolved = await resolveJurisdictionWithCache(input);
+      results.push({
+        input,
+        cacheKey,
+        jurisdictionId: resolved?.id ?? null,
+        ok: true,
+        reason: resolved ? "warmed" : "not_found"
+      });
+    } catch (error) {
+      results.push({
+        input,
+        cacheKey,
+        jurisdictionId: null,
+        ok: false,
+        reason: error instanceof Error ? error.message : "unknown_error"
+      });
+    }
+  }
+
+  return results;
 }
 
 export async function buildRetrievalPlan(input: NormalizedQueryInput): Promise<RetrievalPlan> {

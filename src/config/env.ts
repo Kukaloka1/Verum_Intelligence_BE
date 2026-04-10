@@ -3,6 +3,8 @@ import { z } from "zod";
 
 dotenv.config();
 
+const booleanEnvSchema = z.enum(["true", "false"]).transform((value) => value === "true");
+
 const envSchema = z.object({
   PORT: z.coerce.number().default(4000),
   HOST: z.string().default("0.0.0.0"),
@@ -16,6 +18,13 @@ const envSchema = z.object({
   UPSTASH_REDIS_REST_URL: z.string().optional(),
   UPSTASH_REDIS_REST_TOKEN: z.string().optional(),
   QUERY_GUARDRAILS_MODE: z.enum(["auto", "enabled", "disabled"]).default("auto"),
+  QUERY_PREWARM_ENABLED: booleanEnvSchema.default("true"),
+  QUERY_PREWARM_TIMEOUT_MS: z.coerce.number().int().positive().default(25000),
+  QUERY_PREWARM_JURISDICTIONS: z.string().default("DIFC,ADGM"),
+  QUERY_PREWARM_EMBEDDING_ENABLED: booleanEnvSchema.default("false"),
+  QUERY_PREWARM_EMBEDDING_TEXT: z
+    .string()
+    .default("Verum Module 1 startup warmup embedding check."),
 
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_CHAT_MODEL: z.string().default("gpt-5-mini"),

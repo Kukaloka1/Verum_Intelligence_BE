@@ -42,6 +42,13 @@ interface EmbeddingDimensionCacheEntry {
   summary: CorpusEmbeddingDimensionSummary;
 }
 
+interface CorpusEmbeddingDimensionPrewarmResult {
+  jurisdictionId: string | null;
+  ok: boolean;
+  summary: CorpusEmbeddingDimensionSummary | null;
+  reason: string;
+}
+
 const EMBEDDING_DIMENSION_SAMPLE_LIMIT = 24;
 const EMBEDDING_DIMENSION_CACHE_TTL_MS = 5 * 60 * 1000;
 const embeddingDimensionCache = new Map<string, EmbeddingDimensionCacheEntry>();
@@ -210,6 +217,45 @@ async function inspectCorpusEmbeddingDimensions(input: {
   return summary;
 }
 
+async function prewarmCorpusEmbeddingDimensionCache(
+  jurisdictionIds: Array<string | null>
+): Promise<CorpusEmbeddingDimensionPrewarmResult[]> {
+  const uniqueIds = Array.from(
+    new Set(
+      jurisdictionIds.map((value) => {
+        if (typeof value !== "string") {
+          return null;
+        }
+
+        const trimmed = value.trim();
+        return trimmed.length > 0 ? trimmed : null;
+      })
+    )
+  );
+
+  const results: CorpusEmbeddingDimensionPrewarmResult[] = [];
+  for (const jurisdictionId of uniqueIds) {
+    try {
+      const summary = await inspectCorpusEmbeddingDimensions({ jurisdictionId });
+      results.push({
+        jurisdictionId,
+        ok: true,
+        summary,
+        reason: "warmed"
+      });
+    } catch (error) {
+      results.push({
+        jurisdictionId,
+        ok: false,
+        summary: null,
+        reason: error instanceof Error ? error.message : "unknown_error"
+      });
+    }
+  }
+
+  return results;
+}
+
 async function resolveJurisdiction(jurisdictionInput: string): Promise<JurisdictionRecord | null> {
   const db = getDbClient();
   const slug = jurisdictionInput.toLowerCase();
@@ -291,5 +337,6 @@ export const queryRetrievalRepository = {
   resolveJurisdiction,
   fetchKeywordMatchedChunks,
   fetchVectorMatchedChunks,
-  inspectCorpusEmbeddingDimensions
+  inspectCorpusEmbeddingDimensions,
+  prewarmCorpusEmbeddingDimensionCache
 };

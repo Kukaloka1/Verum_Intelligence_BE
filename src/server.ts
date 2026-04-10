@@ -1,10 +1,12 @@
 import { buildApp } from "@/app";
 import { env } from "@/config/env";
+import { runQueryStartupPrewarm } from "@/modules/query/query.prewarm";
 import { logError, logInfo } from "@/utils/logger";
 
 async function start() {
   try {
     const app = await buildApp();
+    await runQueryStartupPrewarm();
     await app.listen({
       port: env.PORT,
       host: env.HOST
