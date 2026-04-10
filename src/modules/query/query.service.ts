@@ -181,7 +181,8 @@ export function createQueryService(overrides: Partial<QueryServiceDependencies> 
         buildMeta: (result) => ({
           items: result.items.length,
           deferred: result.deferred,
-          reason: result.deferred ? result.reason : undefined
+          reason: result.reason,
+          diagnostics: result.diagnostics
         })
       });
       const keywordPromise = measureAsyncStage({
@@ -191,7 +192,8 @@ export function createQueryService(overrides: Partial<QueryServiceDependencies> 
         buildMeta: (result) => ({
           items: result.items.length,
           deferred: result.deferred,
-          reason: result.deferred ? result.reason : undefined
+          reason: result.reason,
+          diagnostics: result.diagnostics
         })
       });
 
@@ -299,6 +301,8 @@ export function createQueryService(overrides: Partial<QueryServiceDependencies> 
             queryId: resolvedQueryId,
             normalizedInput,
             retrievalPlan,
+            vectorResult,
+            keywordResult,
             groundedEntries: groundedContext.entries,
             response,
             citations

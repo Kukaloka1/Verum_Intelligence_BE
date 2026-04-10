@@ -1,8 +1,9 @@
 import { getDbClient } from "@/db/client";
-import type { TablesInsert } from "@/db/database.types";
+import type { Json, TablesInsert } from "@/db/database.types";
 import type {
   PersistActionResult,
   QuerySuccessResponse,
+  RetrievalBranchResult,
   RetrievalPlan
 } from "@/modules/query/query.types";
 
@@ -13,12 +14,26 @@ export interface RecordQueryLogInput {
   userId: string | null;
   response: QuerySuccessResponse;
   retrievalPlan: RetrievalPlan;
+  vectorResult: RetrievalBranchResult;
+  keywordResult: RetrievalBranchResult;
 }
 
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     value
   );
+}
+
+function toJsonSafe(value: unknown): Json | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(JSON.stringify(value)) as Json;
+  } catch {
+    return null;
+  }
 }
 
 async function recordQueryLog(input: RecordQueryLogInput): Promise<PersistActionResult> {
@@ -34,7 +49,19 @@ async function recordQueryLog(input: RecordQueryLogInput): Promise<PersistAction
       jurisdictionSlug: input.retrievalPlan.jurisdictionSlug,
       keywordHints: input.retrievalPlan.keywordHints,
       keywordSearchQuery: input.retrievalPlan.keywordSearchQuery,
-      notes: input.retrievalPlan.notes
+      notes: input.retrievalPlan.notes,
+      retrievalBranches: {
+        vector: {
+          deferred: input.vectorResult.deferred,
+          reason: input.vectorResult.reason,
+          diagnostics: toJsonSafe(input.vectorResult.diagnostics)
+        },
+        keyword: {
+          deferred: input.keywordResult.deferred,
+          reason: input.keywordResult.reason,
+          diagnostics: toJsonSafe(input.keywordResult.diagnostics)
+        }
+      }
     },
     sources_used: input.response.sourcesUsed,
     result_status: input.response.resultStatus

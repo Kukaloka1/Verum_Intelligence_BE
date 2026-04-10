@@ -10,30 +10,30 @@ import { toErrorMessage } from "@/utils/errors";
 import { logError } from "@/utils/logger";
 import { getOpenAIClient } from "./openai.client";
 
-const DEFAULT_OPENAI_SYNTHESIS_MAX_OUTPUT_TOKENS = 900;
-const MAX_OUTPUT_TOKENS =
-  env.OPENAI_SYNTHESIS_MAX_OUTPUT_TOKENS ?? DEFAULT_OPENAI_SYNTHESIS_MAX_OUTPUT_TOKENS;
-const DEFAULT_OPENAI_SYNTHESIS_TIMEOUT_MS = env.NODE_ENV === "production" ? 9000 : 14000;
-const OPENAI_SYNTHESIS_TIMEOUT_MS =
-  env.OPENAI_SYNTHESIS_TIMEOUT_MS ?? DEFAULT_OPENAI_SYNTHESIS_TIMEOUT_MS;
-const SYNTHESIS_MAX_EVIDENCE_ENTRIES = env.OPENAI_SYNTHESIS_MAX_EVIDENCE_ENTRIES ?? 2;
-const SYNTHESIS_MAX_CITATION_ENTRIES = env.OPENAI_SYNTHESIS_MAX_CITATION_ENTRIES ?? 2;
-const SYNTHESIS_MAX_EXCERPT_CHARS = env.OPENAI_SYNTHESIS_MAX_EXCERPT_CHARS ?? 120;
-const OPENAI_SYNTHESIS_REASONING_EFFORT = env.OPENAI_SYNTHESIS_REASONING_EFFORT ?? "low";
+const MAX_OUTPUT_TOKENS = env.OPENAI_SYNTHESIS_MAX_OUTPUT_TOKENS;
+const OPENAI_SYNTHESIS_TIMEOUT_MS = env.OPENAI_SYNTHESIS_TIMEOUT_MS;
+const SYNTHESIS_MAX_EVIDENCE_ENTRIES = env.OPENAI_SYNTHESIS_MAX_EVIDENCE_ENTRIES;
+const SYNTHESIS_MAX_CITATION_ENTRIES = env.OPENAI_SYNTHESIS_MAX_CITATION_ENTRIES;
+const SYNTHESIS_MAX_EXCERPT_CHARS = env.OPENAI_SYNTHESIS_MAX_EXCERPT_CHARS;
+const SYNTHESIS_REQUIRED_SECTIONS = env.OPENAI_SYNTHESIS_MAX_SECTIONS;
+const SYNTHESIS_SUMMARY_MAX_CHARS = env.OPENAI_SYNTHESIS_SUMMARY_MAX_CHARS;
+const SYNTHESIS_SECTION_TITLE_MAX_CHARS = env.OPENAI_SYNTHESIS_SECTION_TITLE_MAX_CHARS;
+const SYNTHESIS_SECTION_CONTENT_MAX_CHARS = env.OPENAI_SYNTHESIS_SECTION_CONTENT_MAX_CHARS;
+const SYNTHESIS_LIMITATIONS_MAX_CHARS = env.OPENAI_SYNTHESIS_LIMITATIONS_MAX_CHARS;
+const OPENAI_SYNTHESIS_REASONING_EFFORT = env.OPENAI_SYNTHESIS_REASONING_EFFORT;
 
 const synthesisOutputSchema = z
   .object({
-    summary: z.string().trim().min(1).max(500),
+    summary: z.string().trim().min(1).max(SYNTHESIS_SUMMARY_MAX_CHARS),
     body: z
       .array(
         z.object({
-          sectionTitle: z.string().trim().min(1).max(72),
-          content: z.string().trim().min(1).max(520)
+          sectionTitle: z.string().trim().min(1).max(SYNTHESIS_SECTION_TITLE_MAX_CHARS),
+          content: z.string().trim().min(1).max(SYNTHESIS_SECTION_CONTENT_MAX_CHARS)
         })
       )
-      .min(1)
-      .max(3),
-    limitations: z.union([z.string().trim().min(1).max(360), z.null()])
+      .length(SYNTHESIS_REQUIRED_SECTIONS),
+    limitations: z.union([z.string().trim().min(1).max(SYNTHESIS_LIMITATIONS_MAX_CHARS), z.null()])
   })
   .strict();
 
@@ -41,35 +41,63 @@ const synthesisJsonSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    summary: { type: "string", maxLength: 500 },
+    summary: { type: "string", maxLength: SYNTHESIS_SUMMARY_MAX_CHARS },
     body: {
       type: "array",
-      maxItems: 3,
+      minItems: SYNTHESIS_REQUIRED_SECTIONS,
+      maxItems: SYNTHESIS_REQUIRED_SECTIONS,
       items: {
         type: "object",
         additionalProperties: false,
         properties: {
-          sectionTitle: { type: "string", maxLength: 72 },
-          content: { type: "string", maxLength: 520 }
+          sectionTitle: { type: "string", maxLength: SYNTHESIS_SECTION_TITLE_MAX_CHARS },
+          content: { type: "string", maxLength: SYNTHESIS_SECTION_CONTENT_MAX_CHARS }
         },
         required: ["sectionTitle", "content"]
       }
     },
     limitations: {
-      anyOf: [{ type: "string", maxLength: 360 }, { type: "null" }]
+      anyOf: [{ type: "string", maxLength: SYNTHESIS_LIMITATIONS_MAX_CHARS }, { type: "null" }]
     }
   },
   required: ["summary", "body", "limitations"]
-} as const;
+};
 
 const SYSTEM_PROMPT = [
-  "You are Verum Intelligence grounded synthesis for regulatory research.",
-  "Use only evidence lines and citation lines provided in the prompt.",
-  "Do not invent claims, obligations, dates, or sources.",
-  "If support is limited, state scope limits in 'limitations'.",
-  "Tone must be concise, institutional, and non-chatty.",
-  "Return at most 3 sections and avoid repetition.",
-  "Return only JSON that matches the required schema."
+  "You are Verum Intelligence grounded synthesis for regulatory and compliance research.",
+  "Produce high-signal institutional analysis that is decision-useful, while staying strictly inside the provided evidence boundary.",
+  "Use only the evidence blocks and citation blocks provided in the prompt.",
+  "Never invent facts, obligations, timelines, thresholds, entities, requirements, or sources.",
+  "Never rely on unstated model knowledge.",
+  "Never cite anything outside the provided citation blocks.",
+
+  "STYLE:",
+  "Write in an institutional, analytical, executive tone.",
+  "Be concise, precise, and useful.",
+  "Do not sound chatty, apologetic, uncertain-by-default, or disclaimer-heavy.",
+  "Inside each section content, use short readable paragraphs separated by blank lines.",
+  "Use numbered points when helpful for clarity.",
+  "If you use ordered points, keep numbering sequential (1, 2, 3...) and do not restart numbering inside the same section.",
+  "Use selective markdown bold for key terms only (for example **obligation**, **effective date**, **scope**).",
+  "Never bold entire sentences or whole paragraphs.",
+
+  "MANDATORY BODY STRUCTURE (EXACTLY 3 SECTIONS):",
+  "Section 1: Strongest supported regulatory position.",
+  "Section 2: Most relevant practical/operational implications for a compliance team.",
+  "Section 3: Priority actions, checks, or follow-up lines of inquiry.",
+  "Each section must add new information and avoid repetition.",
+
+  "SUMMARY RULE:",
+  "Lead with the strongest evidence-supported conclusion, not a restatement of the question.",
+
+  "LIMITATIONS RULE:",
+  "Keep limitations short and subordinate.",
+  "Use limitations only for what remains unconfirmed by evidence.",
+  "Do not output long legal-disclaimer paragraphs.",
+  "If evidence is consultative/thematic rather than rulebook-level, state that once and move on.",
+
+  "OUTPUT RULE:",
+  "Return only valid JSON matching the schema."
 ].join(" ");
 
 interface QuerySynthesisInput {
@@ -141,31 +169,63 @@ function clampExcerpt(excerpt: string): string {
   return `${compact.slice(0, SYNTHESIS_MAX_EXCERPT_CHARS - 3)}...`;
 }
 
-function buildUserPrompt(input: QuerySynthesisInput): string {
-  const evidenceLines = input.groundedContext.entries
-    .slice(0, SYNTHESIS_MAX_EVIDENCE_ENTRIES)
-    .map((entry, index) => {
-      const date = entry.publishedAt ?? "n/a";
-      const sourceType = entry.sourceType ?? "n/a";
-      return `E${index + 1}|${entry.sourceName}|${entry.documentTitle}|${date}|${sourceType}|${clampExcerpt(
-        entry.excerpt
-      )}`;
-    });
-
-  const citationLines = input.citations
-    .slice(0, SYNTHESIS_MAX_CITATION_ENTRIES)
-    .map((citation, index) => `C${index + 1}|${citation.sourceName}|${citation.documentTitle}`);
+function formatEvidenceBlock(entry: GroundedContext["entries"][number], index: number): string {
+  const date = entry.publishedAt ?? "n/a";
+  const sourceType = entry.sourceType ?? "n/a";
+  const url = entry.url ?? "n/a";
 
   return [
-    "TASK: Produce a grounded structured answer.",
-    `QUERY: ${input.normalizedInput.query}`,
+    `EVIDENCE ${index + 1}:`,
+    `Source: ${entry.sourceName}`,
+    `Title: ${entry.documentTitle}`,
+    `Date: ${date}`,
+    `Type: ${sourceType}`,
+    `URL: ${url}`,
+    `Excerpt: ${clampExcerpt(entry.excerpt)}`
+  ].join("\n");
+}
+
+function formatCitationBlock(citation: QueryCitation, index: number): string {
+  return [
+    `CITATION ${index + 1}:`,
+    `Source: ${citation.sourceName}`,
+    `Title: ${citation.documentTitle}`,
+    `Type: ${citation.sourceType ?? "n/a"}`,
+    `Date: ${citation.publishedAt ?? "n/a"}`,
+    `URL: ${citation.url ?? "n/a"}`
+  ].join("\n");
+}
+
+function buildUserPrompt(input: QuerySynthesisInput): string {
+  const evidenceBlocks = input.groundedContext.entries
+    .slice(0, SYNTHESIS_MAX_EVIDENCE_ENTRIES)
+    .map(formatEvidenceBlock);
+
+  const citationBlocks = input.citations
+    .slice(0, SYNTHESIS_MAX_CITATION_ENTRIES)
+    .map(formatCitationBlock);
+
+  return [
+    "TASK: Produce a grounded regulatory answer that is decision-useful.",
+    `QUESTION: ${input.normalizedInput.query}`,
     `JURISDICTION: ${input.normalizedInput.jurisdiction ?? "UNSCOPED"}`,
-    `EVIDENCE_COUNT: ${evidenceLines.length}`,
-    "EVIDENCE_LINES:",
-    evidenceLines.join("\n"),
-    "CITATION_LINES:",
-    citationLines.join("\n"),
-    "Use only these lines. Do not add external knowledge."
+    "",
+    "MANDATORY RESPONSE SHAPE:",
+    "1) Strongest supported regulatory position",
+    "2) Practical operational implications",
+    "3) Priority actions/checks/follow-up inquiry",
+    `Return exactly ${SYNTHESIS_REQUIRED_SECTIONS} body sections.`,
+    "Within each section content, prefer: one concise lead sentence + short paragraphs and/or a compact numbered list.",
+    "Set limitations to null unless a material evidence gap must be stated.",
+    "If limitations are needed, keep them concise and non-dominant.",
+    "",
+    "EVIDENCE BLOCKS:",
+    evidenceBlocks.length > 0 ? evidenceBlocks.join("\n\n") : "NONE",
+    "",
+    "CITATION BLOCKS:",
+    citationBlocks.length > 0 ? citationBlocks.join("\n\n") : "NONE",
+    "",
+    "Use only this material."
   ].join("\n");
 }
 

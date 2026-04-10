@@ -76,6 +76,7 @@ export interface RetrievalBranchResult {
   items: RetrievedChunkCandidate[];
   deferred: boolean;
   reason: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export interface RankedRetrievalResult {
@@ -119,6 +120,8 @@ export interface PersistQueryRecordInput {
   queryId: string;
   normalizedInput: NormalizedQueryInput;
   retrievalPlan: RetrievalPlan;
+  vectorResult: RetrievalBranchResult;
+  keywordResult: RetrievalBranchResult;
   groundedEntries: RetrievedChunkCandidate[];
   response: QuerySuccessResponse;
   citations: QueryCitation[];

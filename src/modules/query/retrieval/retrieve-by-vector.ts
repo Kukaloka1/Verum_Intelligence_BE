@@ -1,6 +1,6 @@
 import { queryRetrievalRepository } from "@/repositories/query-retrieval.repository";
 import {
-  createEmbedding,
+  createEmbeddingDetailed,
   getConfiguredEmbeddingModelInfo
 } from "@/services/openai/openai.embeddings";
 import { logError } from "@/utils/logger";
@@ -10,6 +10,54 @@ import type {
   RetrievalPlan,
   RetrievedChunkCandidate
 } from "../query.types";
+
+function buildBaseDiagnostics(input: {
+  jurisdictionId: string | null;
+  corpusEmbeddingSummary: Awaited<
+    ReturnType<typeof queryRetrievalRepository.inspectCorpusEmbeddingDimensions>
+  >;
+  modelInfo: ReturnType<typeof getConfiguredEmbeddingModelInfo>;
+}): Record<string, unknown> {
+  return {
+    jurisdictionId: input.jurisdictionId,
+    embeddingModel: input.modelInfo.model,
+    expectedDimension: input.modelInfo.expectedDimension,
+    expectedDimensionSource: input.modelInfo.source,
+    corpusEmbedding: {
+      sampledRows: input.corpusEmbeddingSummary.sampledRows,
+      detectedDimension: input.corpusEmbeddingSummary.detectedDimension,
+      distinctDimensions: input.corpusEmbeddingSummary.distinctDimensions,
+      mixedDimensions: input.corpusEmbeddingSummary.mixedDimensions
+    }
+  };
+}
+
+function toEmbeddingDeferredReasonCode(
+  failure:
+    | "provider_unavailable"
+    | "empty_input"
+    | "timeout"
+    | "provider_error"
+    | "invalid_payload"
+    | "dimension_mismatch"
+): string {
+  switch (failure) {
+    case "provider_unavailable":
+      return "embedding_provider_unavailable";
+    case "empty_input":
+      return "embedding_empty_input";
+    case "timeout":
+      return "embedding_timeout";
+    case "provider_error":
+      return "embedding_provider_error";
+    case "invalid_payload":
+      return "embedding_invalid_payload";
+    case "dimension_mismatch":
+      return "embedding_dimension_mismatch";
+    default:
+      return "embedding_failure";
+  }
+}
 
 function buildExcerpt(content: string): string {
   const compact = content.replace(/\s+/g, " ").trim();
@@ -50,13 +98,22 @@ export async function retrieveByVector(plan: RetrievalPlan): Promise<RetrievalBr
   const corpusEmbeddingSummary = await queryRetrievalRepository.inspectCorpusEmbeddingDimensions({
     jurisdictionId: plan.jurisdictionId
   });
+  const baseDiagnostics = buildBaseDiagnostics({
+    jurisdictionId: plan.jurisdictionId,
+    corpusEmbeddingSummary,
+    modelInfo: modelDimensionInfo
+  });
 
   if (corpusEmbeddingSummary.sampledRows === 0) {
     return {
       method: "vector",
       items: [],
       deferred: true,
-      reason: "Vector retrieval deferred because the current corpus scope has no embedded chunks."
+      reason: "Vector retrieval deferred because the current corpus scope has no embedded chunks.",
+      diagnostics: {
+        ...baseDiagnostics,
+        deferredReasonCode: "no_embedded_chunks"
+      }
     };
   }
 
@@ -72,7 +129,11 @@ export async function retrieveByVector(plan: RetrievalPlan): Promise<RetrievalBr
       method: "vector",
       items: [],
       deferred: true,
-      reason
+      reason,
+      diagnostics: {
+        ...baseDiagnostics,
+        deferredReasonCode: "corpus_mixed_dimensions"
+      }
     };
   }
 
@@ -93,19 +154,41 @@ export async function retrieveByVector(plan: RetrievalPlan): Promise<RetrievalBr
       method: "vector",
       items: [],
       deferred: true,
-      reason
+      reason,
+      diagnostics: {
+        ...baseDiagnostics,
+        deferredReasonCode: "model_corpus_dimension_mismatch"
+      }
     };
   }
 
-  const queryEmbedding = await createEmbedding(plan.normalizedQuery);
-  if (!queryEmbedding) {
+  const embeddingResult = await createEmbeddingDetailed(plan.normalizedQuery);
+  if (!embeddingResult.ok) {
+    const deferredReasonCode = toEmbeddingDeferredReasonCode(embeddingResult.failure);
+    const reason = `Vector retrieval deferred because query embedding failed (${embeddingResult.failure}).`;
     return {
       method: "vector",
       items: [],
       deferred: true,
-      reason: "Vector retrieval deferred because query embedding could not be generated (missing or unavailable OpenAI config)."
+      reason,
+      diagnostics: {
+        ...baseDiagnostics,
+        deferredReasonCode,
+        embedding: {
+          status: "failed",
+          failure: embeddingResult.failure,
+          failureReason: embeddingResult.reason,
+          model: embeddingResult.model,
+          expectedDimension: embeddingResult.expectedDimension,
+          actualDimension: embeddingResult.actualDimension,
+          attempts: embeddingResult.attempts,
+          durationMs: embeddingResult.durationMs
+        }
+      }
     };
   }
+
+  const queryEmbedding = embeddingResult.vector;
 
   if (
     typeof corpusEmbeddingSummary.detectedDimension === "number" &&
@@ -124,7 +207,19 @@ export async function retrieveByVector(plan: RetrievalPlan): Promise<RetrievalBr
       method: "vector",
       items: [],
       deferred: true,
-      reason
+      reason,
+      diagnostics: {
+        ...baseDiagnostics,
+        deferredReasonCode: "query_corpus_dimension_mismatch",
+        embedding: {
+          status: "ok",
+          model: embeddingResult.model,
+          expectedDimension: embeddingResult.expectedDimension,
+          actualDimension: embeddingResult.actualDimension,
+          attempts: embeddingResult.attempts,
+          durationMs: embeddingResult.durationMs
+        }
+      }
     };
   }
 
@@ -141,7 +236,25 @@ export async function retrieveByVector(plan: RetrievalPlan): Promise<RetrievalBr
       items: [],
       deferred: false,
       reason:
-        "Vector retrieval executed but did not find candidates above the current similarity threshold for this scope."
+        "Vector retrieval executed but did not find candidates above the current similarity threshold for this scope.",
+      diagnostics: {
+        ...baseDiagnostics,
+        deferredReasonCode: null,
+        embedding: {
+          status: "ok",
+          model: embeddingResult.model,
+          expectedDimension: embeddingResult.expectedDimension,
+          actualDimension: embeddingResult.actualDimension,
+          attempts: embeddingResult.attempts,
+          durationMs: embeddingResult.durationMs
+        },
+        retrieval: {
+          candidatePoolLimit: plan.vectorCandidatePoolLimit,
+          topK: plan.vectorTopK,
+          similarityThreshold: plan.vectorSimilarityThreshold,
+          matchedItems: 0
+        }
+      }
     };
   }
 
@@ -157,6 +270,24 @@ export async function retrieveByVector(plan: RetrievalPlan): Promise<RetrievalBr
     method: "vector",
     items: scoredCandidates,
     deferred: false,
-    reason: `Vector retrieval executed fully in SQL over ${vectorMatches.length} nearest-neighbor match(es).`
+    reason: `Vector retrieval executed fully in SQL over ${vectorMatches.length} nearest-neighbor match(es).`,
+    diagnostics: {
+      ...baseDiagnostics,
+      deferredReasonCode: null,
+      embedding: {
+        status: "ok",
+        model: embeddingResult.model,
+        expectedDimension: embeddingResult.expectedDimension,
+        actualDimension: embeddingResult.actualDimension,
+        attempts: embeddingResult.attempts,
+        durationMs: embeddingResult.durationMs
+      },
+      retrieval: {
+        candidatePoolLimit: plan.vectorCandidatePoolLimit,
+        topK: plan.vectorTopK,
+        similarityThreshold: plan.vectorSimilarityThreshold,
+        matchedItems: vectorMatches.length
+      }
+    }
   };
 }

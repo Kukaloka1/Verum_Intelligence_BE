@@ -14,7 +14,9 @@ export async function persistQueryRecord(
     jurisdictionId: input.retrievalPlan.jurisdictionId,
     userId: input.normalizedInput.userId,
     response: input.response,
-    retrievalPlan: input.retrievalPlan
+    retrievalPlan: input.retrievalPlan,
+    vectorResult: input.vectorResult,
+    keywordResult: input.keywordResult
   });
   actions.push(queryLogAction);
 
