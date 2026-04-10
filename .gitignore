@@ -42,9 +42,12 @@ temp/
 *.pid
 *.seed
 
+# Internal development scripts / artifacts
+src/jobs/smoke-*.ts
+docs/reports/
+
 # Internal backend docs
 docs/API_CONTRACTS.md
 docs/ENVIRONMENT.md
 docs/BACKEND_NOTES.md
 docs/Spec v1 — Rate Limiting + Request Dedup.MD
-

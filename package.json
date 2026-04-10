@@ -9,7 +9,8 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "ingest:demo-corpus": "tsx src/jobs/poll-official-sources.ts",
-    "smoke:embedding-dimension": "tsx src/jobs/smoke-embedding-dimension.ts"
+    "smoke:embedding-dimension": "tsx src/jobs/smoke-embedding-dimension.ts",
+    "smoke:module1-query": "QUERY_GUARDRAILS_MODE=enabled tsx src/jobs/smoke-module1-query.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",
