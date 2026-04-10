@@ -34,10 +34,10 @@ const envSchema = z.object({
   OPENAI_EMBEDDING_SLOW_MS: z.coerce.number().int().positive().default(2500),
   OPENAI_EMBEDDING_TIMEOUT_RETRIES: z.coerce.number().int().min(0).default(1),
   OPENAI_SYNTHESIS_TIMEOUT_MS: z.coerce.number().int().positive().default(22000),
-  OPENAI_SYNTHESIS_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(3200),
-  OPENAI_SYNTHESIS_MAX_EVIDENCE_ENTRIES: z.coerce.number().int().positive().default(4),
-  OPENAI_SYNTHESIS_MAX_CITATION_ENTRIES: z.coerce.number().int().positive().default(5),
-  OPENAI_SYNTHESIS_MAX_EXCERPT_CHARS: z.coerce.number().int().positive().default(220),
+  OPENAI_SYNTHESIS_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(1600),
+  OPENAI_SYNTHESIS_MAX_EVIDENCE_ENTRIES: z.coerce.number().int().positive().default(3),
+  OPENAI_SYNTHESIS_MAX_CITATION_ENTRIES: z.coerce.number().int().positive().default(3),
+  OPENAI_SYNTHESIS_MAX_EXCERPT_CHARS: z.coerce.number().int().positive().default(150),
   OPENAI_SYNTHESIS_MAX_SECTIONS: z.coerce
     .number()
     .int()
@@ -47,9 +47,9 @@ const envSchema = z.object({
       message:
         "OPENAI_SYNTHESIS_MAX_SECTIONS must remain 3 for Module 1 contract-stable synthesis."
     }),
-  OPENAI_SYNTHESIS_SUMMARY_MAX_CHARS: z.coerce.number().int().positive().default(700),
+  OPENAI_SYNTHESIS_SUMMARY_MAX_CHARS: z.coerce.number().int().positive().default(420),
   OPENAI_SYNTHESIS_SECTION_TITLE_MAX_CHARS: z.coerce.number().int().positive().default(88),
-  OPENAI_SYNTHESIS_SECTION_CONTENT_MAX_CHARS: z.coerce.number().int().positive().default(2400),
+  OPENAI_SYNTHESIS_SECTION_CONTENT_MAX_CHARS: z.coerce.number().int().positive().default(900),
   OPENAI_SYNTHESIS_LIMITATIONS_MAX_CHARS: z.coerce.number().int().positive().default(220),
   OPENAI_SYNTHESIS_REASONING_EFFORT: z
     .enum(["low", "medium", "high"])

@@ -22,6 +22,12 @@ const SYNTHESIS_SECTION_CONTENT_MAX_CHARS = env.OPENAI_SYNTHESIS_SECTION_CONTENT
 const SYNTHESIS_LIMITATIONS_MAX_CHARS = env.OPENAI_SYNTHESIS_LIMITATIONS_MAX_CHARS;
 const OPENAI_SYNTHESIS_REASONING_EFFORT = env.OPENAI_SYNTHESIS_REASONING_EFFORT;
 
+const SECTION_BLUEPRINT = [
+  "Strongest supported regulatory position",
+  "Most relevant practical/operational implications for a compliance team",
+  "Priority actions, checks, or follow-up lines of inquiry"
+] as const;
+
 const synthesisOutputSchema = z
   .object({
     summary: z.string().trim().min(1).max(SYNTHESIS_SUMMARY_MAX_CHARS),
@@ -64,43 +70,21 @@ const synthesisJsonSchema = {
 };
 
 const SYSTEM_PROMPT = [
-  "You are Verum Intelligence grounded synthesis for regulatory and compliance research.",
-  "Produce high-signal institutional analysis that is decision-useful, while staying strictly inside the provided evidence boundary.",
-  "Use only the evidence blocks and citation blocks provided in the prompt.",
+  "You are Verum Intelligence grounded synthesis for regulatory/compliance research.",
+  "Use only provided evidence and allowed sources.",
   "Never invent facts, obligations, timelines, thresholds, entities, requirements, or sources.",
-  "Never rely on unstated model knowledge.",
-  "Never cite anything outside the provided citation blocks.",
-
-  "STYLE:",
-  "Write in an institutional, analytical, executive tone.",
-  "Be concise, precise, and useful.",
   "Write in English only.",
-  "Use plain professional English with clean punctuation.",
-  "Do not include non-English words or non-Latin characters in the answer body.",
-  "Do not sound chatty, apologetic, uncertain-by-default, or disclaimer-heavy.",
-  "Inside each section content, use short readable paragraphs separated by blank lines.",
-  "Use numbered points when helpful for clarity.",
-  "If you use ordered points, keep numbering sequential (1, 2, 3...) and do not restart numbering inside the same section.",
-  "Each section must be complete and coherent; do not end mid-sentence, mid-list item, or mid-word.",
-  "Use selective markdown bold for key terms only (for example **obligation**, **effective date**, **scope**).",
-  "Never bold entire sentences or whole paragraphs.",
-
-  "MANDATORY BODY STRUCTURE (EXACTLY 3 SECTIONS):",
-  "Section 1: Strongest supported regulatory position.",
-  "Section 2: Most relevant practical/operational implications for a compliance team.",
-  "Section 3: Priority actions, checks, or follow-up lines of inquiry.",
-  "Each section must add new information and avoid repetition.",
-
-  "SUMMARY RULE:",
-  "Lead with the strongest evidence-supported conclusion, not a restatement of the question.",
-
-  "LIMITATIONS RULE:",
-  "Keep limitations short and subordinate.",
-  "Use limitations only for what remains unconfirmed by evidence.",
-  "Do not output long legal-disclaimer paragraphs.",
-  "If evidence is consultative/thematic rather than rulebook-level, state that once and move on.",
-
-  "OUTPUT RULE:",
+  "Style: institutional, direct, concise, decision-useful.",
+  "Summary: one sharp conclusion sentence anchored in strongest evidence.",
+  "Body: exactly 3 sections with these exact titles:",
+  "1) Strongest supported regulatory position",
+  "2) Most relevant practical/operational implications for a compliance team",
+  "3) Priority actions, checks, or follow-up lines of inquiry",
+  "For each section: one lead sentence, then exactly 3 numbered action points (1-3).",
+  "Each action point must be compact and concrete.",
+  "Do not repeat wording across sections.",
+  "Limitations: null unless there is a concrete evidence gap; if present, one short complete sentence.",
+  "Avoid disclaimer-heavy language.",
   "Return only valid JSON matching the schema."
 ].join(" ");
 
@@ -173,64 +157,46 @@ function clampExcerpt(excerpt: string): string {
   return `${compact.slice(0, SYNTHESIS_MAX_EXCERPT_CHARS - 3)}...`;
 }
 
-function formatEvidenceBlock(entry: GroundedContext["entries"][number], index: number): string {
-  const date = entry.publishedAt ?? "n/a";
-  const sourceType = entry.sourceType ?? "n/a";
-  const url = entry.url ?? "n/a";
-
-  return [
-    `EVIDENCE ${index + 1}:`,
-    `Source: ${entry.sourceName}`,
-    `Title: ${entry.documentTitle}`,
-    `Date: ${date}`,
-    `Type: ${sourceType}`,
-    `URL: ${url}`,
-    `Excerpt: ${clampExcerpt(entry.excerpt)}`
-  ].join("\n");
+function toEvidencePayload(entry: GroundedContext["entries"][number], index: number) {
+  return {
+    id: `E${index + 1}`,
+    source: entry.sourceName,
+    title: entry.documentTitle,
+    excerpt: clampExcerpt(entry.excerpt)
+  };
 }
 
-function formatCitationBlock(citation: QueryCitation, index: number): string {
-  return [
-    `CITATION ${index + 1}:`,
-    `Source: ${citation.sourceName}`,
-    `Title: ${citation.documentTitle}`,
-    `Type: ${citation.sourceType ?? "n/a"}`,
-    `Date: ${citation.publishedAt ?? "n/a"}`,
-    `URL: ${citation.url ?? "n/a"}`
-  ].join("\n");
+function toCitationPayload(citation: QueryCitation, index: number) {
+  return {
+    id: `C${index + 1}`,
+    source: citation.sourceName,
+    title: citation.documentTitle
+  };
 }
 
 function buildUserPrompt(input: QuerySynthesisInput): string {
   const evidenceBlocks = input.groundedContext.entries
     .slice(0, SYNTHESIS_MAX_EVIDENCE_ENTRIES)
-    .map(formatEvidenceBlock);
+    .map(toEvidencePayload);
 
   const citationBlocks = input.citations
     .slice(0, SYNTHESIS_MAX_CITATION_ENTRIES)
-    .map(formatCitationBlock);
+    .map(toCitationPayload);
 
-  return [
-    "TASK: Produce a grounded regulatory answer that is decision-useful.",
-    `QUESTION: ${input.normalizedInput.query}`,
-    `JURISDICTION: ${input.normalizedInput.jurisdiction ?? "UNSCOPED"}`,
-    "",
-    "MANDATORY RESPONSE SHAPE:",
-    "1) Strongest supported regulatory position",
-    "2) Practical operational implications",
-    "3) Priority actions/checks/follow-up inquiry",
-    `Return exactly ${SYNTHESIS_REQUIRED_SECTIONS} body sections.`,
-    "Within each section content, prefer: one concise lead sentence + short paragraphs and/or a compact numbered list.",
-    "Set limitations to null unless a material evidence gap must be stated.",
-    "If limitations are needed, keep them concise and non-dominant.",
-    "",
-    "EVIDENCE BLOCKS:",
-    evidenceBlocks.length > 0 ? evidenceBlocks.join("\n\n") : "NONE",
-    "",
-    "CITATION BLOCKS:",
-    citationBlocks.length > 0 ? citationBlocks.join("\n\n") : "NONE",
-    "",
-    "Use only this material."
-  ].join("\n");
+  const promptPayload = {
+    task: "Grounded regulatory answer",
+    question: input.normalizedInput.query,
+    jurisdiction: input.normalizedInput.jurisdiction ?? "UNSCOPED",
+    sectionTitles: SECTION_BLUEPRINT,
+    sectionFormat:
+      "Each section: one lead sentence + exactly 3 numbered action points (1-3), concise and concrete.",
+    limitationsRule:
+      "Use null unless there is a concrete evidence gap; if needed, one short complete sentence.",
+    evidence: evidenceBlocks,
+    allowedSources: citationBlocks
+  };
+
+  return `INPUT_JSON:\n${JSON.stringify(promptPayload)}`;
 }
 
 function extractOutputText(payload: OpenAIResponsesCreatePayload): { type: "output_text"; text: string } {
@@ -273,8 +239,8 @@ function parseStructuredAnswer(outputText: string): QueryAnswer {
   const parsedJson = JSON.parse(outputText);
   const structuredAnswer = synthesisOutputSchema.parse(parsedJson);
   const sanitizedSummary = sanitizeGeneratedText(structuredAnswer.summary);
-  const sanitizedBody = structuredAnswer.body.map((section) => ({
-    sectionTitle: sanitizeGeneratedText(section.sectionTitle),
+  const sanitizedBody = structuredAnswer.body.map((section, index) => ({
+    sectionTitle: SECTION_BLUEPRINT[index] ?? sanitizeGeneratedText(section.sectionTitle),
     content: sanitizeGeneratedText(section.content)
   }));
   const sanitizedLimitations =
